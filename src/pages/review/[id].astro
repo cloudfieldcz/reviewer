@@ -1,0 +1,33 @@
+---
+import Review from '~/components/Review.svelte';
+import Layout from '~/layouts/Layout.astro';
+import { normalizePagePath } from '~/lib/comments';
+import { getProject } from '~/lib/projects';
+
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id)) return Astro.redirect('/');
+let project;
+try {
+  project = getProject(id);
+} catch {
+  return new Response('Project not found', { status: 404 });
+}
+
+const rawPath = Astro.url.searchParams.get('path');
+let initialPath = '/';
+try {
+  initialPath = rawPath ? normalizePagePath(rawPath) : '/';
+} catch {
+  initialPath = '/';
+}
+const user = Astro.locals.user;
+---
+
+<Layout title={`Review · ${project.name}`} fullscreen>
+  <Review
+    client:only="svelte"
+    project={{ id: project.id, name: project.name, baseUrl: project.baseUrl }}
+    user={{ id: user.id, name: user.name, role: user.role }}
+    initialPath={initialPath}
+  />
+</Layout>

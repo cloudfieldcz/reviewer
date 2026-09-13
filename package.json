@@ -1,0 +1,44 @@
+{
+  "name": "reviewer",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Website review tool \u2013 comments anchored to page elements via a reverse proxy.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cloudfieldcz/reviewer.git"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "start": "node dist/server/entry.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "astro check && tsc --noEmit -p tsconfig.json",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@astrojs/node": "^9.5.5",
+    "@astrojs/svelte": "^7.2.5",
+    "@medv/finder": "^4.0.2",
+    "@tailwindcss/vite": "^4.3.3",
+    "astro": "^5.18.2",
+    "better-sqlite3": "^13.0.3",
+    "cheerio": "^1.2.0",
+    "csv-stringify": "^6.8.3",
+    "drizzle-orm": "^0.45.2",
+    "svelte": "^5.57.0",
+    "tailwindcss": "^4.3.3",
+    "undici": "^8.10.2"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.20.2",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.0"
+  }
+}

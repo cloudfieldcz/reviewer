@@ -1,0 +1,11 @@
+node_modules
+dist
+.astro
+data
+*.db
+*.db-wal
+*.db-shm
+.env
+oauth2-proxy.env
+.git
+tests

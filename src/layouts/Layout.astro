@@ -1,0 +1,91 @@
+---
+import '~/styles/global.css';
+
+interface Props {
+  title: string;
+  /** Full-height app layout without page padding (review screen). */
+  fullscreen?: boolean;
+}
+const { title, fullscreen = false } = Astro.props;
+const user = Astro.locals.user;
+const initials = (user.name ?? user.email)
+  .split(/[\s.@_-]+/)
+  .filter(Boolean)
+  .slice(0, 2)
+  .map((w) => w[0]!.toUpperCase())
+  .join('');
+const path = Astro.url.pathname;
+---
+
+<!doctype html>
+<html lang="en" class:list={[{ 'overflow-hidden': fullscreen }]}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#15151d" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+    />
+    <title>{title} · Reviewer</title>
+  </head>
+  <body class:list={[fullscreen ? 'h-screen flex flex-col' : 'min-h-screen']}>
+    {
+      !fullscreen && (
+        <header class="chrome">
+          <div class="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+            <a href="/" class="flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-white">
+              <svg viewBox="0 0 24 24" class="h-6 w-6" aria-hidden="true">
+                <rect x="2.6" y="3.6" width="14.8" height="14.8" rx="3.2" fill="none" stroke="currentColor" stroke-width="1.7" opacity="0.65" />
+                <circle cx="17.6" cy="17.6" r="4.6" fill="var(--color-brand)" />
+              </svg>
+              Reviewer
+            </a>
+            <nav class="flex items-center gap-1 text-sm">
+              <a
+                href="/"
+                class:list={[
+                  'rounded-md px-2.5 py-1.5 transition-colors',
+                  path === '/' ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5 hover:text-white',
+                ]}
+              >
+                Projects
+              </a>
+              {user.role === 'admin' && (
+                <a
+                  href="/admin/users"
+                  class:list={[
+                    'rounded-md px-2.5 py-1.5 transition-colors',
+                    path.startsWith('/admin/users') ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5 hover:text-white',
+                  ]}
+                >
+                  Users
+                </a>
+              )}
+              <span class="mx-2 h-6 w-px bg-white/10" />
+              <span class="flex items-center gap-2" title={`${user.email} · ${user.role}`}>
+                <span
+                  class:list={[
+                    'inline-flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold',
+                    user.role === 'admin' ? 'bg-brand text-white' : 'bg-white/10 text-gray-200',
+                  ]}
+                >
+                  {initials}
+                </span>
+                <span class="hidden text-gray-300 sm:inline">{user.name}</span>
+              </span>
+              <a href="/oauth2/sign_out" class="ml-1 rounded-md px-2.5 py-1.5 text-gray-400 transition-colors hover:bg-white/5 hover:text-white">
+                Sign out
+              </a>
+            </nav>
+          </div>
+        </header>
+      )
+    }
+    <slot />
+  </body>
+</html>

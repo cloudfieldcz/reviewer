@@ -1,0 +1,20 @@
+# Local / standalone run WITHOUT authentication (DEV_USER fakes the identity).
+# Production deployment: see README.md ("Deployment") and deploy/docker-compose.reviewer.yaml.
+services:
+  app:
+    build: .
+    ports:
+      - "4321:4321"
+    environment:
+      # NODE_ENV=production in the image disables DEV_USER; override for a local no-auth run.
+      NODE_ENV: development
+      DEV_USER: "dev@example.com:admin"
+      ALLOW_PRIVATE_TARGETS: "true"
+      ALLOW_HTTP_TARGETS: "true"
+      PUBLIC_ORIGIN: "http://localhost:4321"
+    volumes:
+      - reviewer-data:/data
+    restart: unless-stopped
+
+volumes:
+  reviewer-data:

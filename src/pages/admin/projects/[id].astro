@@ -1,0 +1,156 @@
+---
+import Layout from '~/layouts/Layout.astro';
+import { listComments } from '~/lib/comments';
+import { getProject } from '~/lib/projects';
+
+const user = Astro.locals.user;
+if (user.role !== 'admin') return new Response('Forbidden', { status: 403 });
+
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id)) return Astro.redirect('/');
+let project;
+try {
+  project = getProject(id);
+} catch {
+  return new Response('Project not found', { status: 404 });
+}
+
+const all = listComments(project.id, undefined, user);
+const pathFilter = Astro.url.searchParams.get('path') ?? '';
+const authorFilter = Astro.url.searchParams.get('author') ?? '';
+const rows = all.filter((c) => (!pathFilter || c.pagePath === pathFilter) && (!authorFilter || c.author.email === authorFilter));
+const paths = [...new Set(all.map((c) => c.pagePath))].sort();
+const authors = [...new Map(all.map((c) => [c.author.email, c.author])).values()].sort((a, b) => (a.name ?? a.email).localeCompare(b.name ?? b.email));
+
+const exportQs = pathFilter ? `&path=${encodeURIComponent(pathFilter)}` : '';
+const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('en-GB', { timeZone: 'Europe/Prague', dateStyle: 'medium', timeStyle: 'short' });
+---
+
+<Layout title={`Manage · ${project.name}`}>
+  <main class="mx-auto max-w-6xl px-4 py-8">
+    <nav class="mb-3 text-sm text-gray-500"><a href="/" class="hover:text-gray-900">Projects</a> <span class="text-gray-300">/</span> <span class="text-gray-700">{project.name}</span></nav>
+
+    <div class="mb-6 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-tight">{project.name}</h1>
+        <a href={project.baseUrl} target="_blank" rel="noopener" class="mt-1 inline-block font-mono text-xs text-gray-500 hover:text-brand">{project.baseUrl.replace(/^https?:\/\//, '')}</a>
+      </div>
+      <a class="btn-primary" href={`/review/${project.id}`}>Open review</a>
+    </div>
+
+    <section class="card mb-6 p-5">
+      <h2 class="mb-4 text-sm font-semibold tracking-tight">Settings</h2>
+      <form id="project-form" class="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+        <label class="block text-sm">
+          <span class="mb-1.5 block font-medium text-gray-700">Name</span>
+          <input name="name" class="input" value={project.name} required maxlength="200" />
+        </label>
+        <label class="block text-sm">
+          <span class="mb-1.5 block font-medium text-gray-700">Website address</span>
+          <input name="baseUrl" class="input" type="url" value={project.baseUrl} required />
+        </label>
+        <div class="flex gap-2">
+          <button class="btn-primary" type="submit">Save</button>
+          <button class="btn-danger" type="button" id="delete-btn">Delete project</button>
+        </div>
+      </form>
+      <p id="project-msg" class="mt-2 min-h-5 text-sm"></p>
+    </section>
+
+    <section class="mb-4 flex flex-wrap items-end justify-between gap-3">
+      <form method="get" class="flex flex-wrap items-end gap-2 text-sm">
+        <label>
+          <span class="mb-1.5 block font-medium text-gray-700">Page</span>
+          <select name="path" class="input !w-64" onchange="this.form.submit()">
+            <option value="">All pages ({all.length})</option>
+            {paths.map((p) => <option value={p} selected={p === pathFilter}>{p} ({all.filter((c) => c.pagePath === p).length})</option>)}
+          </select>
+        </label>
+        <label>
+          <span class="mb-1.5 block font-medium text-gray-700">Author</span>
+          <select name="author" class="input !w-56" onchange="this.form.submit()">
+            <option value="">All authors</option>
+            {authors.map((a) => <option value={a.email} selected={a.email === authorFilter}>{a.name ?? a.email}</option>)}
+          </select>
+        </label>
+        {(pathFilter || authorFilter) && <a href={`/admin/projects/${project.id}`} class="btn-ghost">Clear</a>}
+      </form>
+      <div class="flex items-center gap-2 text-sm">
+        <span class="text-gray-600">Export{pathFilter ? ' this page' : ' everything'} as</span>
+        <a class="btn-secondary" href={`/api/projects/${project.id}/export?format=md${exportQs}`}>Markdown</a>
+        <a class="btn-secondary" href={`/api/projects/${project.id}/export?format=csv${exportQs}`}>CSV</a>
+        <a class="btn-secondary" href={`/api/projects/${project.id}/export?format=json${exportQs}`}>JSON</a>
+      </div>
+    </section>
+
+    <section class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="border-b border-gray-200 bg-gray-50 text-left text-xs font-medium text-gray-500">
+          <tr>
+            <th class="px-3 py-2.5">#</th>
+            <th class="px-3 py-2">Author</th>
+            <th class="px-3 py-2">Page</th>
+            <th class="px-3 py-2">Element</th>
+            <th class="px-3 py-2">Comment</th>
+            <th class="px-3 py-2.5 whitespace-nowrap">Created</th>
+            <th class="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+          {rows.length === 0 && <tr><td colspan="7" class="px-3 py-8 text-center text-gray-500">No comments{pathFilter || authorFilter ? ' match the filter' : ' yet'}.</td></tr>}
+          {rows.map((c) => (
+            <tr class="align-top transition-colors hover:bg-gray-50" data-comment-id={c.id}>
+              <td class="px-3 py-2.5 font-mono text-xs text-gray-400">{c.id}</td>
+              <td class="px-3 py-2.5 whitespace-nowrap" title={c.author.email}>{c.author.name ?? c.author.email}</td>
+              <td class="px-3 py-2.5 font-mono text-xs"><a class="text-brand hover:underline" href={`/review/${project.id}?path=${encodeURIComponent(c.pagePath)}#c${c.id}`}>{c.pagePath}</a></td>
+              <td class="px-3 py-2.5 text-gray-500 max-w-56">
+                {c.tagName && <code class="text-xs">&lt;{c.tagName}&gt;</code>}
+                {c.textSnippet && <span class="ml-1 line-clamp-2 text-xs">{c.textSnippet}</span>}
+              </td>
+              <td class="px-3 py-2.5 whitespace-pre-wrap max-w-md text-gray-800">{c.body}</td>
+              <td class="px-3 py-2.5 whitespace-nowrap text-gray-500">{fmt(c.createdAt)}</td>
+              <td class="px-3 py-2.5 text-right"><button class="btn-ghost !px-2 !py-0.5 text-red-700 delete-comment" type="button" data-id={c.id}>Delete</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</Layout>
+
+<script>
+  const projectId = Number(location.pathname.split('/').pop());
+  const msg = document.getElementById('project-msg')!;
+  const say = (text: string, ok: boolean) => {
+    msg.textContent = text;
+    msg.className = 'mt-2 min-h-5 text-sm ' + (ok ? 'text-green-700' : 'text-red-700');
+  };
+
+  document.getElementById('project-form')!.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target as HTMLFormElement);
+    const res = await fetch(`/api/projects/${projectId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: fd.get('name'), baseUrl: fd.get('baseUrl') }),
+    });
+    const data = await res.json().catch(() => ({}));
+    say(res.ok ? 'Saved.' : data.error ?? `Error ${res.status}`, res.ok);
+  });
+
+  document.getElementById('delete-btn')!.addEventListener('click', async () => {
+    if (!confirm('Delete this project and all its comments? This cannot be undone.')) return;
+    const res = await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+    if (res.ok) location.href = '/';
+    else say(`Error ${res.status}`, false);
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('.delete-comment').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      if (!confirm('Delete this comment?')) return;
+      const res = await fetch(`/api/comments/${btn.dataset.id}`, { method: 'DELETE' });
+      if (res.ok) btn.closest('tr')?.remove();
+      else say(`Error ${res.status}`, false);
+    }),
+  );
+</script>

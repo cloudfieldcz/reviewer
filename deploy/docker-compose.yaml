@@ -1,0 +1,107 @@
+# Reviewer – complete production stack: Traefik (TLS) → oauth2-proxy (Entra ID) → reviewer → SQLite.
+#
+#   cp deploy/.env.example deploy/.env && chmod 600 deploy/.env   # fill in host + Entra credentials
+#   docker compose -f deploy/docker-compose.yaml up -d
+#
+# Prerequisites: DNS for ${REVIEWER_HOST} points at this host, ports 80 and 443 are free.
+#
+# Already running Traefik and Redis? Then take only the `oauth2-reviewer` and `reviewer` services
+# below, drop the `traefik`/`redis` entries from their `depends_on`, and point
+# OAUTH2_PROXY_REDIS_CONNECTION_URL at your Redis. Nothing else here is Reviewer-specific.
+
+services:
+  traefik:
+    image: traefik:v3
+    container_name: traefik
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-acme:/letsencrypt
+    restart: always
+
+  # Session store for oauth2-proxy. Sessions are short-lived, so no persistence is configured.
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: always
+
+  # The only service exposed to the internet. Authenticates against Entra ID and passes the
+  # identity to the app as X-Forwarded-User / -Email / -Groups headers.
+  oauth2-reviewer:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.13.0   # >= v7.7 for the entra-id provider
+    container_name: oauth2-reviewer
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.oauth2-reviewer.rule=Host(`${REVIEWER_HOST}`)"
+      - "traefik.http.routers.oauth2-reviewer.entrypoints=websecure"
+      - "traefik.http.routers.oauth2-reviewer.tls.certresolver=letsencrypt"
+      - "traefik.http.services.oauth2-reviewer.loadbalancer.server.port=4180"
+    expose:
+      - "4180"
+    environment:
+      OAUTH2_PROXY_PROVIDER: "entra-id"
+      OAUTH2_PROXY_CLIENT_ID: "${OAUTH2_PROXY_CLIENT_ID}"
+      OAUTH2_PROXY_CLIENT_SECRET: "${OAUTH2_PROXY_CLIENT_SECRET}"
+      OAUTH2_PROXY_COOKIE_SECRET: "${OAUTH2_PROXY_COOKIE_SECRET}"
+      OAUTH2_PROXY_OIDC_ISSUER_URL: "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0"
+      OAUTH2_PROXY_SCOPE: "openid profile email"
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"                  # the tenant is already pinned by the issuer URL
+      OAUTH2_PROXY_REDIRECT_URL: "https://${REVIEWER_HOST}/oauth2/callback"
+      OAUTH2_PROXY_WHITELIST_DOMAINS: "${REVIEWER_HOST},login.microsoftonline.com"
+      OAUTH2_PROXY_UPSTREAMS: "http://reviewer:4321"
+      OAUTH2_PROXY_UPSTREAM_TIMEOUT: "60s"
+      OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      # --- roles: read the Entra `roles` claim as "groups" → X-Forwarded-Groups: ADMIN,USER
+      OAUTH2_PROXY_OIDC_GROUPS_CLAIM: "roles"
+      # Uncomment to reject users without an app role already at the proxy (then also set DEFAULT_ROLE="").
+      # OAUTH2_PROXY_ALLOWED_GROUPS: "ADMIN,USER"
+      # --- headers for the app
+      OAUTH2_PROXY_PASS_USER_HEADERS: "true"           # X-Forwarded-User (oid), -Email, -Preferred-Username, -Groups
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "false"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "false"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_REAL_CLIENT_IP_HEADER: "X-Forwarded-For"
+      # --- sessions in Redis; the cookie name also namespaces the Redis keys
+      OAUTH2_PROXY_SESSION_STORE_TYPE: "redis"
+      OAUTH2_PROXY_REDIS_CONNECTION_URL: "redis://redis"
+      OAUTH2_PROXY_COOKIE_NAME: "_oauth2_proxy_reviewer"
+      OAUTH2_PROXY_COOKIE_SAMESITE: "lax"
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_REFRESH: "1h"
+      OAUTH2_PROXY_COOKIE_EXPIRE: "168h"
+    depends_on:
+      - traefik
+      - redis
+      - reviewer
+    restart: always
+
+  reviewer:
+    image: ghcr.io/cloudfieldcz/reviewer:${REVIEWER_TAG:-latest}
+    container_name: reviewer
+    expose:
+      - "4321"      # internal only – never publish; identity comes from the oauth2-proxy headers
+    environment:
+      PUBLIC_ORIGIN: "https://${REVIEWER_HOST}"
+      DATABASE_PATH: "/data/reviewer.db"
+      ADMIN_EMAILS: "${ADMIN_EMAILS}"
+      DEFAULT_ROLE: "${DEFAULT_ROLE}"
+    volumes:
+      - reviewer-data:/data
+    restart: always
+
+volumes:
+  traefik-acme:
+  reviewer-data:

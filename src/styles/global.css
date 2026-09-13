@@ -1,0 +1,110 @@
+@import 'tailwindcss';
+
+/*
+ * Reviewer is chrome around somebody else's website. The reviewed page is the only bright
+ * surface on screen; everything the tool owns is graphite so the two never compete. The accent
+ * is violet because almost no client site uses it – the annotation layer stays legible on top
+ * of any design it lands on.
+ */
+@theme {
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Neutrals: graphite with a violet cast, so chrome and accent belong to one family. */
+  --color-gray-50: #f7f7fa;
+  --color-gray-100: #efeff4;
+  --color-gray-200: #e3e3ec;
+  --color-gray-300: #cacad8;
+  --color-gray-400: #9898ac;
+  --color-gray-500: #71718a;
+  --color-gray-600: #53536a;
+  --color-gray-700: #3d3d50;
+  --color-gray-800: #282834;
+  --color-gray-900: #16161f;
+
+  --color-brand: #6e56cf;
+  --color-brand-dark: #5b44b8;
+  --color-brand-soft: #f0edfb;
+
+  --color-ink: #15151d;
+  --color-ink-raised: #20202c;
+
+  --shadow-card: 0 1px 2px rgba(20, 20, 31, 0.04), 0 1px 3px rgba(20, 20, 31, 0.05);
+  --shadow-pop: 0 8px 24px -6px rgba(20, 20, 31, 0.18), 0 2px 6px rgba(20, 20, 31, 0.08);
+}
+
+html,
+body {
+  height: 100%;
+}
+body {
+  @apply bg-gray-100 font-sans text-gray-900 antialiased;
+  font-feature-settings: 'cv05' 1;
+}
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+::selection {
+  background: var(--color-brand);
+  color: #fff;
+}
+
+/* ---- light surfaces -------------------------------------------------------- */
+
+@utility btn {
+  @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply inline-flex items-center gap-1.5 rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-secondary {
+  @apply inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-card transition-colors hover:border-gray-400 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-danger {
+  @apply inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-700 transition-colors hover:border-red-300 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-ghost {
+  @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-200 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility input {
+  @apply w-full rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 transition-shadow placeholder:text-gray-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25;
+}
+@utility card {
+  @apply rounded-lg border border-gray-200 bg-white shadow-card;
+}
+@utility badge {
+  @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
+}
+@utility meta {
+  @apply font-mono text-[11px] tracking-tight text-gray-500;
+}
+
+/* Segmented control: every option stays visible, the current one is filled. */
+@utility seg {
+  @apply inline-flex items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-100 p-0.5;
+}
+@utility seg-item {
+  @apply inline-flex items-center gap-1.5 rounded-[5px] px-2.5 py-1 text-xs font-medium text-gray-600 transition-colors hover:text-gray-900;
+}
+@utility seg-item-on {
+  @apply inline-flex items-center gap-1.5 rounded-[5px] bg-white px-2.5 py-1 text-xs font-semibold text-gray-900 shadow-card;
+}
+
+/* ---- dark chrome (top bars, review toolbar) -------------------------------- */
+
+@utility chrome {
+  @apply bg-ink text-gray-200;
+}
+@utility chrome-btn {
+  @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-sm font-medium text-gray-400 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40;
+}
+@utility chrome-input {
+  @apply h-8 w-full rounded-md border border-white/10 bg-white/5 px-2.5 font-mono text-xs text-gray-200 transition-colors placeholder:text-gray-500 focus:border-brand focus:bg-white/10 focus:outline-none;
+}
+@utility chrome-seg {
+  @apply inline-flex items-center gap-0.5 rounded-lg bg-white/8 p-0.5 ring-1 ring-white/10;
+}
+@utility chrome-seg-item {
+  @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:text-white;
+}
