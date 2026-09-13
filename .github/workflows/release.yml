@@ -42,3 +42,48 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # GitHub Release with notes generated from the commits since the previous tag.
+  # Runs after the image exists, so the release never points at a missing image.
+  release:
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history – the changelog diffs against the previous tag
+
+      - name: Build release notes
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Nearest version tag reachable from this one – not merely the highest tag in the
+          # repo, so a hotfix cut from an older branch still diffs against its real predecessor.
+          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$TAG^" 2>/dev/null || true)
+          range=${prev:+$prev..}$TAG # no previous tag → the first release logs the whole history
+          {
+            echo "## Changes"
+            echo
+            git log --no-merges --pretty='- %s (%h)' "$range"
+            echo
+            if [ -n "$prev" ]; then
+              echo "**Full diff:** https://github.com/$REPO/compare/$prev...$TAG"
+              echo
+            fi
+            echo "## Docker image"
+            echo
+            echo '```'
+            echo "docker pull ghcr.io/$REPO:${TAG#v}"
+            echo '```'
+          } > notes.md
+          cat notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag

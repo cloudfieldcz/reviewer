@@ -1,5 +1,5 @@
 ---
-import { desc, sql } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import Layout from '~/layouts/Layout.astro';
 import { db, schema } from '~/lib/db';
 
@@ -13,9 +13,13 @@ const users = db
     role: schema.users.role,
     createdAt: schema.users.createdAt,
     lastSeenAt: schema.users.lastSeenAt,
-    commentCount: sql<number>`(select count(*) from comments c where c.user_id = ${schema.users.id})`,
+    // Aggregate over a join – in a correlated subquery drizzle would render `schema.users.id`
+    // as a bare `"id"`, which SQLite resolves against `comments` instead.
+    commentCount: sql<number>`count(${schema.comments.id})`,
   })
   .from(schema.users)
+  .leftJoin(schema.comments, eq(schema.comments.userId, schema.users.id))
+  .groupBy(schema.users.id)
   .orderBy(desc(schema.users.lastSeenAt))
   .all();
 const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('en-GB', { timeZone: 'Europe/Prague', dateStyle: 'medium', timeStyle: 'short' });

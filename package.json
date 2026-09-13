@@ -1,10 +1,10 @@
 {
   "name": "reviewer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
-  "description": "Website review tool \u2013 comments anchored to page elements via a reverse proxy.",
+  "description": "Website review tool – comments anchored to page elements via a reverse proxy.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cloudfieldcz/reviewer.git"

@@ -6,18 +6,23 @@ import { fetchTarget } from './proxy/fetch';
 import { assertPublicHost, normalizeBaseUrl } from './url';
 
 export function listProjects() {
+  // Aggregate over a join instead of correlated subqueries: inside a subquery drizzle renders
+  // `schema.projects.id` as a bare `"id"`, which SQLite would resolve against `comments` instead.
+  const lastCommentAt = sql<string | null>`max(${schema.comments.createdAt})`;
   return db
     .select({
       id: schema.projects.id,
       name: schema.projects.name,
       baseUrl: schema.projects.baseUrl,
       createdAt: schema.projects.createdAt,
-      commentCount: sql<number>`(select count(*) from comments c where c.project_id = ${schema.projects.id})`,
-      lastCommentAt: sql<string | null>`(select max(created_at) from comments c where c.project_id = ${schema.projects.id})`,
+      commentCount: sql<number>`count(${schema.comments.id})`,
+      lastCommentAt,
     })
     .from(schema.projects)
+    .leftJoin(schema.comments, eq(schema.comments.projectId, schema.projects.id))
+    .groupBy(schema.projects.id)
     // Most recently touched project first – that is the one people come back to.
-    .orderBy(desc(sql`coalesce((select max(created_at) from comments c where c.project_id = ${schema.projects.id}), ${schema.projects.createdAt})`))
+    .orderBy(desc(sql`coalesce(${lastCommentAt}, ${schema.projects.createdAt})`))
     .all();
 }
 

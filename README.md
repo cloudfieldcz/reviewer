@@ -75,13 +75,16 @@ file, drop `traefik`/`redis` from their `depends_on` and point
 
 ### Releases
 
-`.github/workflows/release.yml` builds the image and pushes it to GHCR whenever a version tag is pushed:
+`.github/workflows/release.yml` builds the image, pushes it to GHCR and opens a GitHub Release whenever a version tag is pushed:
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-The tag `v0.1.0` publishes `ghcr.io/cloudfieldcz/reviewer:0.1.0` and `:latest`. To roll a deployment forward, pull and recreate: `docker compose pull reviewer && docker compose up -d reviewer`.
+The tag `v0.1.0` publishes `ghcr.io/cloudfieldcz/reviewer:0.1.0` and `:latest`, and then creates the release
+`v0.1.0` with notes listing every commit since the previous version tag plus the `docker pull` line. The release
+step runs after the image build, so a release never points at an image that failed to publish. To roll a
+deployment forward, pull and recreate: `docker compose pull reviewer && docker compose up -d reviewer`.
 
 The app listens only on the internal Docker network and rejects requests without the identity headers (`401`), so it cannot be used without going through oauth2-proxy. Backup = copy `/data/reviewer.db` from the `reviewer-data` volume.
 
