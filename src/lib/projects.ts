@@ -66,7 +66,11 @@ export async function updateProject(id: number, input: Partial<ProjectInput>): P
   getProject(id);
   const v = await validateInput(input, true);
   if (Object.keys(v).length === 0) throw new HttpError(400, 'Nothing to update');
-  return db.update(schema.projects).set(v).where(eq(schema.projects.id, id)).returning().get()!;
+  // `validateInput` awaits a DNS lookup, so the row may be gone by the time we write – unlike the
+  // synchronous read-then-write paths elsewhere, this one has to check what the update actually hit.
+  const row = db.update(schema.projects).set(v).where(eq(schema.projects.id, id)).returning().get();
+  if (!row) throw new HttpError(404, 'Project not found');
+  return row;
 }
 
 export function deleteProject(id: number): void {

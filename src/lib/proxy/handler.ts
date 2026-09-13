@@ -1,11 +1,12 @@
 import type { Project } from '../db/schema';
+import { env } from '../env';
 import { fetchTarget, readBodyLimited } from './fetch';
 import { rewriteHtml, STRIPPED_RESPONSE_HEADERS, toProxyPath, toTargetUrl } from './rewrite';
 
 /** Origin under which Reviewer is reachable by the browser (for absolute rewritten links). */
 export function publicOrigin(request: Request): string {
-  const env = process.env.PUBLIC_ORIGIN?.trim();
-  if (env) return env.replace(/\/$/, '');
+  const configured = env('PUBLIC_ORIGIN').trim();
+  if (configured) return configured.replace(/\/$/, '');
   const h = request.headers;
   const proto = h.get('x-forwarded-proto') ?? new URL(request.url).protocol.replace(':', '');
   const host = h.get('x-forwarded-host') ?? h.get('host') ?? new URL(request.url).host;
