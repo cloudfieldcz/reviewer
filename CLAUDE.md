@@ -90,6 +90,10 @@ A positional XPath alone is never trusted, and text match outranks a stale selec
 these without a test. No match → the comment stays in the sidebar flagged "element not found";
 comment text must never disappear.
 
+Comments also carry the viewport they were written in (`comments.viewport`, `'desktop' | 'phone'`),
+because the phone DOM is a different DOM. The review screen anchors and lists **only** the current
+viewport's comments; the others are announced in the sidebar with a one-click switch, never dropped.
+
 ## Conventions
 
 - **English** everywhere in the repo: code, comments, UI strings, docs, commit messages.

@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { createComment, listComments, normalizePagePath } from '~/lib/comments';
+import { createComment, listComments, normalizePagePath, normalizeViewport } from '~/lib/comments';
 import { handler, HttpError, json, readJson, str } from '~/lib/http';
 
 export const GET: APIRoute = handler((ctx) => {
@@ -19,6 +19,7 @@ export const POST: APIRoute = handler(async (ctx) => {
     {
       projectId,
       pagePath: normalizePagePath(b.page_path ?? b.pagePath),
+      viewport: normalizeViewport(b.viewport),
       body: str(b.body) ?? '',
       selector: str(b.selector, 2000),
       xpath: str(b.xpath, 2000),

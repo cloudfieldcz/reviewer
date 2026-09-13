@@ -33,6 +33,8 @@ export const comments = sqliteTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     /** '/contact?x=1' – path + query without origin */
     pagePath: text('page_path').notNull(),
+    /** 'desktop' | 'phone' – the simulated viewport the comment was made in; the DOM differs between them */
+    viewport: text('viewport').notNull().default('desktop'),
     body: text('body').notNull(),
     // element anchors
     selector: text('selector'),

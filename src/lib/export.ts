@@ -17,6 +17,7 @@ export function exportComments(project: Project, comments: CommentDto[], format:
             author_name: c.author.name ?? '',
             author_email: c.author.email,
             page_path: c.pagePath,
+            viewport: c.viewport,
             tag_name: c.tagName ?? '',
             text_snippet: c.textSnippet ?? '',
             selector: c.selector ?? '',
@@ -50,9 +51,10 @@ export function toMarkdown(project: Project, comments: CommentDto[]): string {
     lines.push(`## ${path}`, '', `<${project.baseUrl}${path}>`, '');
     for (const c of list) {
       const el = c.tagName ? `\`<${c.tagName}>\`` : '';
+      const view = c.viewport === 'phone' ? ' _(iPhone 15)_' : '';
       const snippet = c.textSnippet ? ` “${truncate(c.textSnippet, 60)}”` : '';
       const body = c.body.replace(/\r?\n/g, '\n  ');
-      lines.push(`- **${c.author.name ?? c.author.email}** (${formatDate(c.createdAt)}) – ${el}${snippet} – ${body}`);
+      lines.push(`- **${c.author.name ?? c.author.email}** (${formatDate(c.createdAt)})${view} – ${el}${snippet} – ${body}`);
     }
     lines.push('');
   }

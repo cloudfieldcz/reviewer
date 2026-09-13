@@ -198,6 +198,23 @@ the DOM changed, which is why the text check comes first.
 Resolution is retried a few times after load for pages that render late. Anything that still fails
 to resolve keeps its comment in the sidebar, flagged *element not found*.
 
+### Viewport is part of the comment's identity
+
+Responsive sites render a different DOM at phone width — collapsed navigation, reordered or dropped
+sections — so an anchor recorded on the phone usually has nothing to match on the desktop and would
+show up as *element not found* forever. Rather than making anchoring smarter, the viewport the
+comment was written in is stored on the comment (`comments.viewport`, `'desktop' | 'phone'`) and the
+review screen only anchors, numbers and lists the comments of the viewport currently shown. The
+other viewport's comments are never hidden away silently: the sidebar names their count and switches
+to them in one click, and the admin table and exports carry the viewport per row.
+
+The switch itself resizes the frame instead of reloading it: the iframe element is kept, wrapped in
+a shell of exactly 393 × 852 CSS pixels (iPhone 15) that is scaled down with a CSS transform when the
+window is short. The page keeps a real 393 px viewport at any zoom level, so its own media queries —
+not a simulated user agent — decide what it renders. The device pixel ratio and the user agent are
+*not* faked; a site that serves a different page by user-agent sniffing will still serve the desktop
+one.
+
 ## Data model
 
 ```sql
@@ -211,6 +228,7 @@ projects  id, name,
 
 comments  id, project_id → projects (cascade), user_id → users (cascade),
           page_path,         -- '/contact?x=1' – path + query, no origin
+          viewport,          -- 'desktop' | 'phone' – the simulated screen it was written on
           body,
           selector, xpath, text_snippet, tag_name, rect_top,   -- anchors
           created_at, updated_at

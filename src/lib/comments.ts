@@ -4,10 +4,18 @@ import { db, schema } from './db';
 import { HttpError } from './http';
 import { getProject } from './projects';
 
+/** The simulated viewport a comment belongs to – the target DOM differs between the two. */
+export type Viewport = 'desktop' | 'phone';
+
+export function normalizeViewport(input: unknown): Viewport {
+  return input === 'phone' ? 'phone' : 'desktop';
+}
+
 export interface CommentDto {
   id: number;
   projectId: number;
   pagePath: string;
+  viewport: Viewport;
   body: string;
   selector: string | null;
   xpath: string | null;
@@ -24,6 +32,7 @@ const selectShape = {
   id: schema.comments.id,
   projectId: schema.comments.projectId,
   pagePath: schema.comments.pagePath,
+  viewport: schema.comments.viewport,
   body: schema.comments.body,
   selector: schema.comments.selector,
   xpath: schema.comments.xpath,
@@ -38,11 +47,21 @@ const selectShape = {
 };
 
 
-type Row = Omit<CommentDto, 'author' | 'mine'> & { authorId: number; authorName: string | null; authorEmail: string };
+type Row = Omit<CommentDto, 'author' | 'mine' | 'viewport'> & {
+  viewport: string;
+  authorId: number;
+  authorName: string | null;
+  authorEmail: string;
+};
 
 function toDto(r: Row, viewer: AuthUser): CommentDto {
-  const { authorId, authorName, authorEmail, ...rest } = r;
-  return { ...rest, author: { id: authorId, name: authorName, email: authorEmail }, mine: authorId === viewer.id };
+  const { authorId, authorName, authorEmail, viewport, ...rest } = r;
+  return {
+    ...rest,
+    viewport: normalizeViewport(viewport),
+    author: { id: authorId, name: authorName, email: authorEmail },
+    mine: authorId === viewer.id,
+  };
 }
 
 export function listComments(projectId: number, pagePath: string | undefined, viewer: AuthUser): CommentDto[] {
@@ -55,7 +74,7 @@ export function listComments(projectId: number, pagePath: string | undefined, vi
     .from(schema.comments)
     .innerJoin(schema.users, eq(schema.users.id, schema.comments.userId))
     .where(where)
-    .orderBy(asc(schema.comments.pagePath), asc(schema.comments.rectTop), asc(schema.comments.id))
+    .orderBy(asc(schema.comments.pagePath), asc(schema.comments.viewport), asc(schema.comments.rectTop), asc(schema.comments.id))
     .all()
     .map((r) => toDto(r, viewer));
 }
@@ -74,6 +93,7 @@ export function getComment(id: number, viewer: AuthUser): CommentDto {
 export interface CommentInput {
   projectId: number;
   pagePath: string;
+  viewport: Viewport;
   body: string;
   selector?: string | null;
   xpath?: string | null;
@@ -105,6 +125,7 @@ export function createComment(input: CommentInput, viewer: AuthUser): CommentDto
       projectId: input.projectId,
       userId: viewer.id,
       pagePath: input.pagePath,
+      viewport: input.viewport,
       body,
       selector: input.selector ?? null,
       xpath: input.xpath ?? null,

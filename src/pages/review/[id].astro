@@ -1,7 +1,7 @@
 ---
 import Review from '~/components/Review.svelte';
 import Layout from '~/layouts/Layout.astro';
-import { normalizePagePath } from '~/lib/comments';
+import { normalizePagePath, normalizeViewport } from '~/lib/comments';
 import { getProject } from '~/lib/projects';
 
 const id = Number(Astro.params.id);
@@ -20,6 +20,8 @@ try {
 } catch {
   initialPath = '/';
 }
+// A comment link from the admin table carries the viewport it was written in.
+const initialDevice = normalizeViewport(Astro.url.searchParams.get('device'));
 const user = Astro.locals.user;
 ---
 
@@ -29,5 +31,6 @@ const user = Astro.locals.user;
     project={{ id: project.id, name: project.name, baseUrl: project.baseUrl }}
     user={{ id: user.id, name: user.name, role: user.role }}
     initialPath={initialPath}
+    initialDevice={initialDevice}
   />
 </Layout>

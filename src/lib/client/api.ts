@@ -1,7 +1,7 @@
-import type { CommentDto } from '~/lib/comments';
+import type { CommentDto, Viewport } from '~/lib/comments';
 import type { Anchor } from './anchor';
 
-export type { CommentDto };
+export type { CommentDto, Viewport };
 
 async function call<T>(url: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(url, {
@@ -17,12 +17,13 @@ async function call<T>(url: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   listComments: (projectId: number, path: string) =>
     call<CommentDto[]>(`/api/comments?project=${projectId}&path=${encodeURIComponent(path)}`),
-  createComment: (projectId: number, pagePath: string, body: string, anchor: Anchor) =>
+  createComment: (projectId: number, pagePath: string, viewport: Viewport, body: string, anchor: Anchor) =>
     call<CommentDto>('/api/comments', {
       method: 'POST',
       body: JSON.stringify({
         project_id: projectId,
         page_path: pagePath,
+        viewport,
         body,
         selector: anchor.selector,
         xpath: anchor.xpath,

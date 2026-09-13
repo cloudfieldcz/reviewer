@@ -1,18 +1,22 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { computeAnchor, isReviewerNode, pickMeaningful, resolveAnchor, type Anchor, type ResolveMethod } from '~/lib/client/anchor';
-  import { api, type CommentDto } from '~/lib/client/api';
+  import { api, type CommentDto, type Viewport } from '~/lib/client/api';
   import { Overlay } from '~/lib/client/overlay';
 
   interface Props {
     project: { id: number; name: string; baseUrl: string };
     user: { id: number; name: string; role: 'admin' | 'user' };
     initialPath: string;
+    initialDevice: Viewport;
   }
-  let { project, user, initialPath }: Props = $props();
+  let { project, user, initialPath, initialDevice }: Props = $props();
 
   const PREFIX = `/p/${project.id}`;
   const INTRO_KEY = 'reviewer.intro.v2';
+  const DEVICE_KEY = 'reviewer.device';
+  /** iPhone 15 CSS viewport; the bezel is cosmetic and sits outside the page box. */
+  const PHONE = { w: 393, h: 852, bezel: 14, top: 40 };
   const host = project.baseUrl.replace(/^https?:\/\//, '');
 
   // ---- state ----------------------------------------------------------------
@@ -36,6 +40,13 @@
   let error = $state<string | null>(null);
   let loading = $state(true);
   let frameError = $state(false);
+  /**
+   * Simulated viewport. The target site renders a different DOM at phone width, so comments belong
+   * to the viewport they were written in – see `visible` / `forDevice`.
+   */
+  let device = $state<Viewport>(initialDevice);
+  let stageW = $state(0);
+  let stageH = $state(0);
 
   // Non-reactive DOM handles (elements live inside the iframe document).
   let overlay: Overlay | null = null;
@@ -47,15 +58,27 @@
 
   const picking = $derived(commentMode && !altActive);
 
+  /** The phone shell shrinks to fit a short window instead of being cut off. */
+  const phoneScale = $derived.by(() => {
+    if (device !== 'phone' || !stageW || !stageH) return 1;
+    const s = Math.min(1, (stageW - 32) / (PHONE.w + 2 * PHONE.bezel), (stageH - 32) / (PHONE.h + PHONE.top + PHONE.bezel));
+    return Math.max(0.3, Math.round(s * 1000) / 1000);
+  });
+  const deviceLabel = $derived(device === 'phone' ? 'iPhone 15' : 'Desktop');
+
+  /** Only the current viewport's comments are anchored, numbered and drawn. */
+  const forDevice = $derived(comments.filter((c) => c.viewport === device));
+  const otherCount = $derived(comments.length - forDevice.length);
+
   const visible = $derived.by(() => {
     void resolved; // element positions change whenever anchors are re-resolved
-    return comments
+    return forDevice
       .filter((c) => filter === 'all' || c.mine)
       .map((c) => ({ ...c, order: liveTop(c) }))
       .sort((a, b) => a.order - b.order || a.id - b.id);
   });
   const numberOf = $derived(new Map(visible.map((c, i) => [c.id, i + 1])));
-  const mineCount = $derived(comments.filter((c) => c.mine).length);
+  const mineCount = $derived(forDevice.filter((c) => c.mine).length);
 
   function liveTop(c: CommentDto): number {
     const el = elements.get(c.id);
@@ -71,6 +94,23 @@
     if (!on) cancelDraft();
     else overlay?.setHover(null);
     flashHint();
+  }
+
+  function setDevice(d: Viewport) {
+    if (device === d) return;
+    device = d;
+    cancelDraft();
+    activeId = null;
+    try {
+      localStorage.setItem(DEVICE_KEY, d);
+    } catch {
+      // private mode: the URL still carries the choice
+    }
+    const url = new URL(location.href);
+    url.searchParams.set('device', d);
+    history.replaceState(null, '', url);
+    // The frame reflows at the new width, so every anchor and marker has to be recomputed.
+    setTimeout(resolveAll, 150);
   }
 
   function flashHint() {
@@ -247,7 +287,7 @@
     if (!doc || !doc.body) return;
     const next: Record<number, { method: ResolveMethod } | null> = {};
     elements = new Map();
-    for (const c of comments) {
+    for (const c of forDevice) {
       const r = resolveAnchor(doc, c);
       next[c.id] = r ? { method: r.method } : null;
       if (r) elements.set(c.id, r.el);
@@ -274,8 +314,9 @@
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     void comments;
+    void device;
     clearTimeout(retryTimer);
-    const missing = () => comments.some((c) => !elements.has(c.id));
+    const missing = () => forDevice.some((c) => !elements.has(c.id));
     let attempts = 0;
     const tickRetry = () => {
       if (!missing() || attempts++ >= 5) return;
@@ -318,7 +359,7 @@
     draft.saving = true;
     error = null;
     try {
-      const created = await api.createComment(project.id, path, draft.body, draft.anchor);
+      const created = await api.createComment(project.id, path, device, draft.body, draft.anchor);
       comments = [...comments, created];
       if (draftEl) elements.set(created.id, draftEl);
       resolved = { ...resolved, [created.id]: { method: 'selector' } };
@@ -410,6 +451,14 @@
     window.addEventListener('message', onMessage);
     window.addEventListener('keydown', onKeydown);
     window.addEventListener('keyup', onKeyup);
+    if (!new URL(location.href).searchParams.has('device')) {
+      try {
+        const saved = localStorage.getItem(DEVICE_KEY);
+        if (saved === 'phone' || saved === 'desktop') device = saved;
+      } catch {
+        // keep the server-side default
+      }
+    }
     try {
       introMute = localStorage.getItem(INTRO_KEY) === 'done';
     } catch {
@@ -430,6 +479,20 @@
 {#snippet iconComment(cls: string)}
   <svg viewBox="0 0 16 16" class={cls} fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M13.5 8.2c0 2.5-2.5 4.5-5.5 4.5-.7 0-1.3-.1-1.9-.3L2.5 13.5l1-2.8C2.6 9.9 2.5 9.1 2.5 8.2c0-2.5 2.5-4.5 5.5-4.5s5.5 2 5.5 4.5Z" />
+  </svg>
+{/snippet}
+
+{#snippet iconDesktop(cls: string)}
+  <svg viewBox="0 0 16 16" class={cls} fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="1.8" y="2.8" width="12.4" height="8.4" rx="1.3" />
+    <path d="M5.5 13.8h5" />
+  </svg>
+{/snippet}
+
+{#snippet iconPhone(cls: string)}
+  <svg viewBox="0 0 16 16" class={cls} fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="4.3" y="1.6" width="7.4" height="12.8" rx="1.8" />
+    <path d="M7 3.3h2" />
   </svg>
 {/snippet}
 
@@ -475,6 +538,30 @@
 
     <span class="mx-1 h-6 w-px bg-white/10"></span>
 
+    <!-- Viewport: the site is rendered at the real width, so responsive layouts can be reviewed too. -->
+    <div class="chrome-seg" role="group" aria-label="Viewport">
+      <button
+        class={['chrome-seg-item !px-2', device === 'desktop' && 'bg-white/15 text-white hover:text-white']}
+        onclick={() => setDevice('desktop')}
+        aria-pressed={device === 'desktop'}
+        title="Desktop – the page fills the window"
+      >
+        {@render iconDesktop('h-3.5 w-3.5')}
+        <span class="hidden xl:inline">Desktop</span>
+      </button>
+      <button
+        class={['chrome-seg-item !px-2', device === 'phone' && 'bg-white/15 text-white hover:text-white']}
+        onclick={() => setDevice('phone')}
+        aria-pressed={device === 'phone'}
+        title="iPhone 15 – 393 × 852 px viewport"
+      >
+        {@render iconPhone('h-3.5 w-3.5')}
+        <span class="hidden xl:inline">iPhone 15</span>
+      </button>
+    </div>
+
+    <span class="mx-1 h-6 w-px bg-white/10"></span>
+
     <!-- Mode: both options are always on screen, so the label can never be read as an action. -->
     <div class="chrome-seg" role="group" aria-label="Interaction mode">
       <button
@@ -504,17 +591,42 @@
 
   <div class="flex min-h-0 flex-1">
     <!-- frame -->
-    <div class="relative min-w-0 flex-1 bg-white">
-      <iframe
-        bind:this={iframe}
-        src={frameSrc(initialPath)}
-        title={project.name}
-        class="h-full w-full border-0"
-        onload={onFrameLoad}
-      ></iframe>
+    <div
+      class={['relative min-w-0 flex-1', device === 'phone' ? 'bg-gray-800' : 'bg-white']}
+      bind:clientWidth={stageW}
+      bind:clientHeight={stageH}
+    >
+      <!-- The iframe element is never recreated, so switching viewports reflows the page instead of reloading it. -->
+      <div class="absolute inset-0 flex items-center justify-center overflow-hidden">
+        <div
+          class={['relative shrink-0', device === 'phone' && 'rounded-[54px] bg-gray-950 shadow-2xl ring-1 ring-white/15']}
+          style={device === 'phone'
+            ? `width:${PHONE.w + 2 * PHONE.bezel}px;height:${PHONE.h + PHONE.top + PHONE.bezel}px;padding:${PHONE.top}px ${PHONE.bezel}px ${PHONE.bezel}px;transform:scale(${phoneScale})`
+            : 'width:100%;height:100%'}
+        >
+          <iframe
+            bind:this={iframe}
+            src={frameSrc(initialPath)}
+            title={project.name}
+            class={['h-full w-full border-0 bg-white', device === 'phone' && 'rounded-[40px]']}
+            onload={onFrameLoad}
+          ></iframe>
 
-      <!-- The viewport is framed in the mode colour: state you read without reading. -->
-      <div class={['pointer-events-none absolute inset-0 border-2 transition-colors duration-200', picking ? 'border-brand' : 'border-transparent']}></div>
+          {#if device === 'phone'}
+            <!-- Cosmetic dynamic island – drawn in the bezel, never over the page being reviewed. -->
+            <div class="pointer-events-none absolute left-1/2 top-[9px] h-[22px] w-[86px] -translate-x-1/2 rounded-full bg-black ring-1 ring-white/10"></div>
+          {/if}
+
+          <!-- The viewport is framed in the mode colour: state you read without reading. -->
+          <div
+            class={[
+              'pointer-events-none absolute inset-0 border-2 transition-colors duration-200',
+              device === 'phone' && 'rounded-[54px]',
+              picking ? 'border-brand' : 'border-transparent',
+            ]}
+          ></div>
+        </div>
+      </div>
 
       <div class="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-3">
         <div
@@ -582,13 +694,28 @@
     <aside class="flex w-96 shrink-0 flex-col border-l border-gray-200 bg-gray-50" bind:this={sidebarEl}>
       <div class="border-b border-gray-200 bg-white px-3 py-2.5">
         <div class="flex items-center justify-between gap-2">
-          <h2 class="text-sm font-semibold tracking-tight">Comments</h2>
+          <div class="flex min-w-0 items-center gap-1.5">
+            <h2 class="text-sm font-semibold tracking-tight">Comments</h2>
+            <span
+              class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500"
+              title="Comments belong to the viewport they were written in – the page renders differently on a phone"
+            >{deviceLabel}</span>
+          </div>
           <div class="seg" role="group" aria-label="Filter comments">
-            <button class={filter === 'all' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'all')} aria-pressed={filter === 'all'}>All {comments.length}</button>
+            <button class={filter === 'all' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'all')} aria-pressed={filter === 'all'}>All {forDevice.length}</button>
             <button class={filter === 'mine' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'mine')} aria-pressed={filter === 'mine'}>Mine {mineCount}</button>
           </div>
         </div>
         <p class="meta mt-1 truncate" title={project.baseUrl + path}>{path}</p>
+        {#if otherCount > 0}
+          <button
+            class="mt-1.5 flex w-full items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-left text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-100"
+            onclick={() => setDevice(device === 'phone' ? 'desktop' : 'phone')}
+          >
+            {otherCount}
+            {otherCount === 1 ? 'comment' : 'comments'} in the {device === 'phone' ? 'desktop' : 'iPhone 15'} view – switch
+          </button>
+        {/if}
       </div>
 
       {#if error}
@@ -626,7 +753,10 @@
             <span class="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-gray-200 text-gray-500">
               {@render iconComment('h-5 w-5')}
             </span>
-            <p class="text-sm font-medium text-gray-700">{filter === 'mine' ? 'Nothing from you on this page' : 'No comments on this page'}</p>
+            <p class="text-sm font-medium text-gray-700">
+              {filter === 'mine' ? 'Nothing from you here' : 'No comments here'}
+            </p>
+            <p class="mt-0.5 text-xs text-gray-400">{path} · {deviceLabel}</p>
             <p class="mt-1 text-xs text-gray-500">
               {#if commentMode}
                 Click anything in the page to write the first one.

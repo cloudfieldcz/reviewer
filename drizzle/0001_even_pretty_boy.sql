@@ -1,0 +1,1 @@
+ALTER TABLE `comments` ADD `viewport` text DEFAULT 'desktop' NOT NULL;

@@ -25,7 +25,8 @@ public HTTPS can be reviewed the moment an admin adds its URL.
 |---|---|
 | **Project** | A website under review: a name plus a base URL. All comments belong to a project. |
 | **Page** | One path inside a project, e.g. `/contact?lang=en`. Comments are grouped by page. |
-| **Comment** | A note by one person, anchored to one element on one page. |
+| **Viewport** | The simulated screen the page is reviewed at: *Desktop* (the frame fills the window) or *iPhone 15* (393 × 852 px, centred in a phone shell). Comments belong to the viewport they were written in. |
+| **Comment** | A note by one person, anchored to one element on one page in one viewport. |
 | **Anchor** | The stored description of the element (CSS selector, XPath, text snippet) used to find it again on later visits. |
 | **Comment mode** | Review screen state where clicks create comments instead of following links. |
 | **Browse mode** | The opposite: the site behaves normally, so the reviewer can navigate to the page they want to comment on. |
@@ -125,6 +126,19 @@ listed with an **element not found** flag.
 **Navigation.** Links inside the frame stay inside the proxy. The toolbar shows the current path,
 offers back / forward / reload, and takes a typed path. The path is mirrored into the Reviewer URL
 (`?path=…`) so a specific page under review can be linked to or reloaded.
+
+**Viewport.** A second switch in the toolbar renders the page either at full width (*Desktop*) or in
+an iPhone 15 shell — a real 393 × 852 px viewport, so the site's own media queries decide what it
+shows. The frame is never reloaded when switching, only resized, and the shell scales down to fit a
+short window (the page still believes it is 393 × 852). The choice is mirrored into the URL
+(`?device=…`) and remembered per browser.
+
+**Comments are kept per viewport.** A phone layout is a different DOM: the navigation collapses into
+a burger, sections are reordered, elements disappear. A comment made on the phone would therefore
+have no element to point at on the desktop, so the sidebar shows only the comments of the current
+viewport, labelled with it, and a line above the list says how many comments the other viewport has
+and switches to it. The admin table shows the viewport per comment, links to the review screen in
+it, and exports carry it.
 
 ## Comments surviving site changes
 
