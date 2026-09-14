@@ -92,7 +92,7 @@ const ago = (s: string) => {
                   {p.lastCommentAt && <span class="text-gray-400"> · last {ago(p.lastCommentAt)}</span>}
                 </p>
                 {/* z-10 keeps these above the card-wide stretched link on the project name */}
-                <div class="relative z-10 mt-3 flex items-center gap-1">
+                <div class="relative z-10 mt-3 flex items-center gap-2">
                   <a href={`/review/${p.id}`} class="btn-primary">
                     Review
                     <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -100,7 +100,7 @@ const ago = (s: string) => {
                     </svg>
                   </a>
                   {isAdmin && (
-                    <a href={`/admin/projects/${p.id}`} class="btn-ghost">
+                    <a href={`/admin/projects/${p.id}`} class="btn-secondary">
                       Manage
                     </a>
                   )}
