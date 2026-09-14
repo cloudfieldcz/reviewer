@@ -15,6 +15,13 @@
       "when": 1789334262703,
       "tag": "0001_even_pretty_boy",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789382660923,
+      "tag": "0002_material_korvac",
+      "breakpoints": true
     }
   ]
 }

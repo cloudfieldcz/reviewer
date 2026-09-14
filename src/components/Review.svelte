@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { computeAnchor, isReviewerNode, pickMeaningful, resolveAnchor, type Anchor, type ResolveMethod } from '~/lib/client/anchor';
-  import { api, type CommentDto, type Viewport } from '~/lib/client/api';
+  import { api, type CommentDto, type ReplyDto, type Viewport } from '~/lib/client/api';
   import { Overlay } from '~/lib/client/overlay';
 
   interface Props {
@@ -37,6 +37,10 @@
   let activeId = $state<number | null>(Number(location.hash.match(/^#c(\d+)$/)?.[1]) || null);
   let draft = $state<{ anchor: Anchor; body: string; saving: boolean } | null>(null);
   let editing = $state<{ id: number; body: string; saving: boolean } | null>(null);
+  let replying = $state<{ commentId: number; body: string; saving: boolean } | null>(null);
+  let editingReply = $state<{ id: number; commentId: number; body: string; saving: boolean } | null>(null);
+  /** Resolved threads are kept but stay out of the way until asked for – in the list and in the page. */
+  let showResolved = $state(false);
   let error = $state<string | null>(null);
   let loading = $state(true);
   let frameError = $state(false);
@@ -70,15 +74,18 @@
   const forDevice = $derived(comments.filter((c) => c.viewport === device));
   const otherCount = $derived(comments.length - forDevice.length);
 
+  const openForDevice = $derived(forDevice.filter((c) => !c.resolvedAt));
+  const resolvedCount = $derived(forDevice.length - openForDevice.length);
+
   const visible = $derived.by(() => {
     void resolved; // element positions change whenever anchors are re-resolved
     return forDevice
-      .filter((c) => filter === 'all' || c.mine)
+      .filter((c) => (filter === 'all' || c.mine) && (showResolved || !c.resolvedAt))
       .map((c) => ({ ...c, order: liveTop(c) }))
       .sort((a, b) => a.order - b.order || a.id - b.id);
   });
   const numberOf = $derived(new Map(visible.map((c, i) => [c.id, i + 1])));
-  const mineCount = $derived(forDevice.filter((c) => c.mine).length);
+  const mineCount = $derived(openForDevice.filter((c) => c.mine).length);
 
   function liveTop(c: CommentDto): number {
     const el = elements.get(c.id);
@@ -300,7 +307,14 @@
     overlay?.setMarkers(
       visible
         .filter((c) => elements.has(c.id))
-        .map((c) => ({ id: c.id, number: numberOf.get(c.id)!, el: elements.get(c.id)!, mine: c.mine, active: c.id === activeId })),
+        .map((c) => ({
+          id: c.id,
+          number: numberOf.get(c.id)!,
+          el: elements.get(c.id)!,
+          mine: c.mine,
+          active: c.id === activeId,
+          resolved: c.resolvedAt != null,
+        })),
     );
   }
   $effect(() => {
@@ -396,6 +410,85 @@
       comments = comments.filter((x) => x.id !== c.id);
       elements.delete(c.id);
       if (activeId === c.id) activeId = null;
+      if (replying?.commentId === c.id) replying = null;
+      if (editingReply?.commentId === c.id) editingReply = null;
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+
+  // ---- resolving ------------------------------------------------------------
+  async function toggleResolved(c: CommentDto) {
+    try {
+      const updated = await api.setResolved(c.id, c.resolvedAt == null);
+      comments = comments.map((x) => (x.id === updated.id ? updated : x));
+      // A freshly closed thread drops out of the list unless resolved ones are shown.
+      if (updated.resolvedAt && !showResolved) {
+        if (activeId === c.id) activeId = null;
+        if (replying?.commentId === c.id) replying = null;
+        if (editing?.id === c.id) editing = null;
+      }
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+
+  // ---- replies --------------------------------------------------------------
+  /** Replaces the reply list of one comment without touching the rest of the DTO. */
+  function patchReplies(commentId: number, fn: (replies: ReplyDto[]) => ReplyDto[]) {
+    comments = comments.map((c) => (c.id === commentId ? { ...c, replies: fn(c.replies) } : c));
+  }
+
+  async function startReply(c: CommentDto) {
+    replying = { commentId: c.id, body: '', saving: false };
+    editing = null;
+    editingReply = null;
+    draft = null;
+    activeId = c.id;
+    await tick();
+    sidebarEl?.querySelector<HTMLTextAreaElement>(`#reply-${c.id}`)?.focus();
+  }
+
+  async function saveReply() {
+    if (!replying || !replying.body.trim()) return;
+    replying.saving = true;
+    const commentId = replying.commentId;
+    try {
+      const created = await api.createReply(commentId, replying.body);
+      patchReplies(commentId, (rs) => [...rs, created]);
+      replying = null;
+    } catch (e) {
+      error = (e as Error).message;
+      if (replying) replying.saving = false;
+    }
+  }
+
+  function startReplyEdit(c: CommentDto, r: ReplyDto) {
+    editingReply = { id: r.id, commentId: c.id, body: r.body, saving: false };
+    replying = null;
+    editing = null;
+  }
+
+  async function saveReplyEdit() {
+    if (!editingReply || !editingReply.body.trim()) return;
+    editingReply.saving = true;
+    const commentId = editingReply.commentId;
+    try {
+      const updated = await api.updateReply(editingReply.id, editingReply.body);
+      patchReplies(commentId, (rs) => rs.map((r) => (r.id === updated.id ? updated : r)));
+      editingReply = null;
+    } catch (e) {
+      error = (e as Error).message;
+      if (editingReply) editingReply.saving = false;
+    }
+  }
+
+  async function removeReply(c: CommentDto, r: ReplyDto) {
+    if (!confirm('Delete this reply?')) return;
+    try {
+      await api.deleteReply(r.id);
+      patchReplies(c.id, (rs) => rs.filter((x) => x.id !== r.id));
+      if (editingReply?.id === r.id) editingReply = null;
     } catch (e) {
       error = (e as Error).message;
     }
@@ -433,11 +526,15 @@
     altActive = e.altKey;
     if (e.key === 'Escape') {
       if (intro) dismissIntro();
+      else if (editingReply) editingReply = null;
+      else if (replying) replying = null;
       else if (editing) editing = null;
       else cancelDraft();
     }
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       if (draft) saveDraft();
+      else if (editingReply) saveReplyEdit();
+      else if (replying) saveReply();
       else if (editing) saveEdit();
     }
     if ((e.key === 'c' || e.key === 'C') && !isTyping(e.target) && !e.metaKey && !e.ctrlKey && !draft) {
@@ -702,11 +799,24 @@
             >{deviceLabel}</span>
           </div>
           <div class="seg" role="group" aria-label="Filter comments">
-            <button class={filter === 'all' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'all')} aria-pressed={filter === 'all'}>All {forDevice.length}</button>
+            <button class={filter === 'all' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'all')} aria-pressed={filter === 'all'}>All {openForDevice.length}</button>
             <button class={filter === 'mine' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'mine')} aria-pressed={filter === 'mine'}>Mine {mineCount}</button>
           </div>
         </div>
         <p class="meta mt-1 truncate" title={project.baseUrl + path}>{path}</p>
+        {#if resolvedCount > 0}
+          <button
+            class={[
+              'mt-1.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] font-medium transition-colors',
+              showResolved ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
+            ]}
+            onclick={() => (showResolved = !showResolved)}
+            aria-pressed={showResolved}
+          >
+            <span aria-hidden="true">✓</span>
+            {resolvedCount} resolved – {showResolved ? 'hide' : 'show'}
+          </button>
+        {/if}
         {#if otherCount > 0}
           <button
             class="mt-1.5 flex w-full items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-left text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-100"
@@ -757,6 +867,9 @@
               {filter === 'mine' ? 'Nothing from you here' : 'No comments here'}
             </p>
             <p class="mt-0.5 text-xs text-gray-400">{path} · {deviceLabel}</p>
+            {#if resolvedCount > 0 && !showResolved}
+              <p class="mt-1 text-xs text-gray-500">{resolvedCount} resolved {resolvedCount === 1 ? 'comment is' : 'comments are'} hidden.</p>
+            {/if}
             <p class="mt-1 text-xs text-gray-500">
               {#if commentMode}
                 Click anything in the page to write the first one.
@@ -771,10 +884,12 @@
           {@const found = resolved[c.id] != null}
           {@const canEdit = c.mine || user.role === 'admin'}
           {@const isActive = activeId === c.id}
+          {@const isResolved = c.resolvedAt != null}
           <article
             data-cid={c.id}
             class={[
-              'group relative cursor-pointer overflow-hidden rounded-lg border bg-white p-3 pl-3.5 shadow-card transition-all',
+              'group relative cursor-pointer overflow-hidden rounded-lg border p-3 pl-3.5 shadow-card transition-all',
+              isResolved ? 'bg-gray-50' : 'bg-white',
               isActive ? 'border-amber-400 ring-2 ring-amber-400/30' : 'border-gray-200 hover:border-gray-300 hover:shadow-pop',
             ]}
             role="button"
@@ -782,12 +897,12 @@
             onclick={() => focusComment(c.id, { scrollFrame: true })}
             onkeydown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) focusComment(c.id, { scrollFrame: true }); }}
           >
-            <span class={['absolute inset-y-0 left-0 w-1', isActive ? 'bg-amber-400' : c.mine ? 'bg-brand' : 'bg-gray-300']}></span>
+            <span class={['absolute inset-y-0 left-0 w-1', isActive ? 'bg-amber-400' : isResolved ? 'bg-gray-300' : c.mine ? 'bg-brand' : 'bg-gray-400']}></span>
 
             <div class="mb-1.5 flex items-start justify-between gap-2">
               <div class="flex min-w-0 items-center gap-2">
-                <span class={['inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-semibold tabular-nums', isActive ? 'bg-amber-400 text-gray-900' : c.mine ? 'bg-brand text-white' : 'bg-gray-500 text-white']}>
-                  {numberOf.get(c.id)}
+                <span class={['inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-semibold tabular-nums', isActive ? 'bg-amber-400 text-gray-900' : isResolved ? 'bg-gray-400 text-white' : c.mine ? 'bg-brand text-white' : 'bg-gray-500 text-white']}>
+                  {isResolved ? '✓' : numberOf.get(c.id)}
                 </span>
                 <span class="truncate text-sm font-medium" title={c.author.email}>{c.mine ? 'You' : (c.author.name ?? c.author.email)}</span>
               </div>
@@ -809,6 +924,14 @@
               </p>
             {/if}
 
+            {#if isResolved}
+              <p class="mb-2 inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800">
+                <span aria-hidden="true">✓</span>
+                Resolved by {c.resolvedBy?.id === user.id ? 'you' : (c.resolvedBy?.name ?? c.resolvedBy?.email ?? 'someone')}
+                <time datetime={c.resolvedAt} title={fmt(c.resolvedAt!)}>· {ago(c.resolvedAt!)}</time>
+              </p>
+            {/if}
+
             {#if editing?.id === c.id}
               <textarea class="input min-h-20 resize-y" bind:value={editing.body} disabled={editing.saving} onclick={(e) => e.stopPropagation()}></textarea>
               <div class="mt-2 flex justify-end gap-2">
@@ -816,13 +939,72 @@
                 <button class="btn-primary" onclick={(e) => { e.stopPropagation(); saveEdit(); }} disabled={editing.saving || !editing.body.trim()}>Save</button>
               </div>
             {:else}
-              <p class="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">{c.body}</p>
-              {#if canEdit}
-                <div class="mt-2 flex justify-end gap-1 text-xs opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                  <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startEdit(c); }}>Edit</button>
-                  <button class="btn-ghost !px-2 !py-0.5 !text-xs text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); remove(c); }}>Delete</button>
+              <p class={['whitespace-pre-wrap text-sm leading-relaxed', isResolved ? 'text-gray-500' : 'text-gray-800']}>{c.body}</p>
+            {/if}
+
+            {#if c.replies.length > 0}
+              <ul class="mt-2.5 space-y-2 border-l-2 border-gray-200 pl-2.5">
+                {#each c.replies as r (r.id)}
+                  {@const canEditReply = r.mine || user.role === 'admin'}
+                  <li class="group/reply">
+                    <div class="flex items-baseline justify-between gap-2">
+                      <span class="truncate text-xs font-medium text-gray-700" title={r.author.email}>{r.mine ? 'You' : (r.author.name ?? r.author.email)}</span>
+                      <time class="shrink-0 text-[10px] text-gray-400" datetime={r.createdAt} title={fmt(r.createdAt)}>{ago(r.createdAt)}</time>
+                    </div>
+                    {#if editingReply?.id === r.id}
+                      <textarea class="input mt-1 min-h-16 resize-y" bind:value={editingReply.body} disabled={editingReply.saving} onclick={(e) => e.stopPropagation()}></textarea>
+                      <div class="mt-1.5 flex justify-end gap-2">
+                        <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); editingReply = null; }}>Cancel</button>
+                        <button class="btn-primary !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); saveReplyEdit(); }} disabled={editingReply.saving || !editingReply.body.trim()}>Save</button>
+                      </div>
+                    {:else}
+                      <p class="whitespace-pre-wrap text-[13px] leading-relaxed text-gray-700">{r.body}</p>
+                      {#if canEditReply}
+                        <div class="mt-0.5 flex gap-1 text-xs opacity-0 transition-opacity group-hover/reply:opacity-100 group-focus-within/reply:opacity-100">
+                          <button class="btn-ghost !px-1.5 !py-0 !text-[11px]" onclick={(e) => { e.stopPropagation(); startReplyEdit(c, r); }}>Edit</button>
+                          <button class="btn-ghost !px-1.5 !py-0 !text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); removeReply(c, r); }}>Delete</button>
+                        </div>
+                      {/if}
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+
+            {#if replying?.commentId === c.id}
+              <div class="mt-2.5">
+                <textarea
+                  id={`reply-${c.id}`}
+                  class="input min-h-16 resize-y"
+                  placeholder="Reply…"
+                  bind:value={replying.body}
+                  disabled={replying.saving}
+                  onclick={(e) => e.stopPropagation()}
+                ></textarea>
+                <div class="mt-1.5 flex items-center justify-between">
+                  <span class="meta">⌘↵ send · esc cancel</span>
+                  <div class="flex gap-2">
+                    <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); replying = null; }} disabled={replying.saving}>Cancel</button>
+                    <button class="btn-primary !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); saveReply(); }} disabled={replying.saving || !replying.body.trim()}>
+                      {replying.saving ? 'Sending…' : 'Reply'}
+                    </button>
+                  </div>
                 </div>
-              {/if}
+              </div>
+            {:else if editing?.id !== c.id}
+              <div class="mt-2 flex items-center justify-between gap-1 text-xs">
+                <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startReply(c); }}>Reply</button>
+                <div class="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                  {#if canEdit}
+                    <button
+                      class={['btn-ghost !px-2 !py-0.5 !text-xs', isResolved ? '' : 'text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800']}
+                      onclick={(e) => { e.stopPropagation(); toggleResolved(c); }}
+                    >{isResolved ? 'Reopen' : 'Resolve'}</button>
+                    <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startEdit(c); }}>Edit</button>
+                    <button class="btn-ghost !px-2 !py-0.5 !text-xs text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); remove(c); }}>Delete</button>
+                  {/if}
+                </div>
+              </div>
             {/if}
           </article>
         {/each}

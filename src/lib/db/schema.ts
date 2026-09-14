@@ -42,6 +42,9 @@ export const comments = sqliteTable(
     textSnippet: text('text_snippet'),
     tagName: text('tag_name'),
     rectTop: real('rect_top'),
+    /** Set when the thread is closed; null means open. */
+    resolvedAt: text('resolved_at'),
+    resolvedBy: integer('resolved_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
     updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
   },
@@ -51,6 +54,29 @@ export const comments = sqliteTable(
   ],
 );
 
+/**
+ * Flat list of replies under a comment – a thread, not a tree. Kept out of `comments` on purpose:
+ * anchoring, viewport, marker numbering and the project comment counts all query `comments`, and a
+ * self-join would mean teaching every one of those about parent rows.
+ */
+export const commentReplies = sqliteTable(
+  'comment_replies',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    commentId: integer('comment_id')
+      .notNull()
+      .references(() => comments.id, { onDelete: 'cascade' }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    body: text('body').notNull(),
+    createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+    updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+  },
+  (t) => [index('comment_replies_comment_idx').on(t.commentId)],
+);
+
 export type User = typeof users.$inferSelect;
 export type Project = typeof projects.$inferSelect;
 export type Comment = typeof comments.$inferSelect;
+export type CommentReply = typeof commentReplies.$inferSelect;

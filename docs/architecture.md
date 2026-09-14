@@ -75,9 +75,10 @@ src/
   lib/auth.ts            role resolution, user upsert, DEV_USER fake identity
   lib/env.ts             env() / envFlag() – the only correct way to read configuration
   lib/http.ts            json / HttpError / handler() / requireAdmin / readJson / idParam / str
-  lib/db/                schema.ts (users, projects, comments) · index.ts (connection, migrations)
+  lib/db/                schema.ts (users, projects, comments, replies) · index.ts (connection, migrations)
   lib/projects.ts        project CRUD, probeUrl()
-  lib/comments.ts        comment CRUD, ownership checks, DTO mapping
+  lib/comments.ts        comment CRUD, resolve/reopen, ownership checks, DTO mapping
+  lib/replies.ts         reply CRUD – no import of comments.ts, the dependency runs one way
   lib/export.ts          Markdown / CSV / JSON rendering
   lib/url.ts             base-URL normalization, SSRF guard
   lib/proxy/             fetch.ts (limits) · rewrite.ts (cheerio) · inject.ts · handler.ts
@@ -231,12 +232,30 @@ comments  id, project_id → projects (cascade), user_id → users (cascade),
           viewport,          -- 'desktop' | 'phone' – the simulated screen it was written on
           body,
           selector, xpath, text_snippet, tag_name, rect_top,   -- anchors
+          resolved_at,       -- null while the thread is open
+          resolved_by → users (set null),
           created_at, updated_at
+
+comment_replies
+          id, comment_id → comments (cascade), user_id → users (cascade),
+          body, created_at, updated_at
 ```
 
-Indexes: `comments(project_id, page_path)` — the query behind every page load — and
-`comments(user_id)`. Foreign keys are enforced (`PRAGMA foreign_keys = ON`); deleting a project
-takes its comments with it.
+Indexes: `comments(project_id, page_path)` — the query behind every page load — `comments(user_id)`
+and `comment_replies(comment_id)`. Foreign keys are enforced (`PRAGMA foreign_keys = ON`); deleting
+a project takes its comments with it, and a comment takes its replies.
+
+**Replies are their own table, not a `parent_id` on `comments`.** Anchoring, viewport, marker
+numbering and the comment counts on the project tiles all query `comments`; a self-join would mean
+teaching every one of those queries to exclude reply rows, and each place that forgot would be a
+quiet bug. A reply carries no anchor, no viewport and no position — the comment above it does — so
+there is nothing for the two to share but a foreign key. Replies for a whole page are fetched in one
+`where comment_id in (…)` and grouped in memory, never one query per comment.
+
+**Resolving is a state on the comment, not a deletion.** `resolved_at` plus `resolved_by` records
+when and by whom, which is what a review round needs to be able to show later; reopening clears
+both. The permission is the same one that guards editing — the comment's author, or an admin — so
+`PATCH /api/comments/:id` carries it (`{ resolved }`) instead of a route of its own.
 
 Migrations are generated with `drizzle-kit` into `drizzle/` and applied automatically at startup,
 so a fresh volume becomes a working database with no manual step.
@@ -258,5 +277,12 @@ Accepted for the MVP, listed so nobody rediscovers them as bugs:
 
 Vitest covers the pure logic where a silent regression would be expensive: HTML rewriting and
 proxy-path mapping (`tests/rewrite.test.ts`), role resolution and URL validation / SSRF checks
-(`tests/auth.test.ts`). The DOM-dependent parts — anchoring and the overlay — are verified by
-driving a real browser against the running app.
+(`tests/auth.test.ts`), and Markdown export rendering (`tests/export.test.ts`).
+
+Two suites run against a real SQLite database opened at `:memory:` (set `DATABASE_PATH` before
+importing `lib/db`), because the bugs they guard against are invisible to the type checker: the
+project comment counts (`tests/projects.test.ts`) and the permission rules around replying and
+resolving, plus the reply-to-comment grouping (`tests/comments.test.ts`).
+
+The DOM-dependent parts — anchoring and the overlay — are verified by driving a real browser against
+the running app.

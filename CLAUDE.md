@@ -41,8 +41,9 @@ src/
   lib/auth.ts            resolveRole(), upsertUser(), DEV_USER fake identity
   lib/http.ts            json/HttpError/handler()/requireAdmin/readJson/idParam/str helpers
   lib/env.ts             env() / envFlag() – the only correct way to read configuration
-  lib/db/                schema.ts (users, projects, comments) + index.ts (connection, migrations)
-  lib/projects.ts        CRUD + probeUrl()          lib/comments.ts  CRUD + DTO mapping
+  lib/db/                schema.ts (users, projects, comments, replies) + index.ts (connection, migrations)
+  lib/projects.ts        CRUD + probeUrl()          lib/comments.ts  CRUD + resolve + DTO mapping
+  lib/replies.ts         reply CRUD (must not import comments.ts – comments.ts imports it)
   lib/export.ts          md / csv / json export     lib/url.ts       base-URL normalization + SSRF guard
   lib/proxy/             fetch.ts (undici, limits) · rewrite.ts (cheerio) · inject.ts · handler.ts
   lib/client/            anchor.ts (finder/xpath/text) · overlay.ts (outline, +, markers) · api.ts
@@ -89,6 +90,19 @@ text, the tag name and the document-relative `top`. `resolveAnchor()` order:
 A positional XPath alone is never trusted, and text match outranks a stale selector – do not reorder
 these without a test. No match → the comment stays in the sidebar flagged "element not found";
 comment text must never disappear.
+
+### Replies and resolving
+Replies live in `comment_replies`, **not** as `parent_id` on `comments` – every query behind
+anchoring, marker numbering and the project comment counts selects from `comments` and must not have
+to filter reply rows out. A reply has no anchor and no viewport; it belongs to the comment. Replies
+for a page are loaded in one `inArray` query and grouped in memory – never one query per comment.
+
+Anyone may reply, including on a resolved thread. Resolving is `resolved_at` + `resolved_by` on the
+comment and goes through `PATCH /api/comments/:id { resolved }`, guarded by the same
+`assertCanModify()` rule as editing: the comment's author or an admin. Reopening clears both
+columns; nothing is ever deleted. The review screen hides resolved comments and their markers by
+default, and the sidebar's *All* / *Mine* counts mean *open* – but a resolved comment is never
+dropped from the list silently, there is always a labelled toggle that brings it back.
 
 Comments also carry the viewport they were written in (`comments.viewport`, `'desktop' | 'phone'`),
 because the phone DOM is a different DOM. The review screen anchors and lists **only** the current

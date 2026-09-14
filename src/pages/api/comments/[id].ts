@@ -1,12 +1,15 @@
 import type { APIRoute } from 'astro';
-import { deleteComment, getComment, updateComment } from '~/lib/comments';
+import { deleteComment, getComment, setResolved, updateComment } from '~/lib/comments';
 import { handler, idParam, json, readJson, str } from '~/lib/http';
 
 export const GET: APIRoute = handler((ctx) => json(getComment(idParam(ctx.params.id), ctx.locals.user)));
 
+/** PATCH { body } edits the text, PATCH { resolved } closes or reopens the thread – same permission. */
 export const PATCH: APIRoute = handler(async (ctx) => {
   const b = await readJson(ctx.request);
-  return json(updateComment(idParam(ctx.params.id), str(b.body) ?? '', ctx.locals.user));
+  const id = idParam(ctx.params.id);
+  if (typeof b.resolved === 'boolean') return json(setResolved(id, b.resolved, ctx.locals.user));
+  return json(updateComment(id, str(b.body) ?? '', ctx.locals.user));
 });
 
 export const DELETE: APIRoute = handler((ctx) => {

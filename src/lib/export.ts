@@ -22,6 +22,10 @@ export function exportComments(project: Project, comments: CommentDto[], format:
             text_snippet: c.textSnippet ?? '',
             selector: c.selector ?? '',
             body: c.body,
+            resolved_at: c.resolvedAt ?? '',
+            resolved_by: c.resolvedBy ? (c.resolvedBy.name ?? c.resolvedBy.email) : '',
+            replies: c.replies.length,
+            replies_text: c.replies.map((r) => `${r.author.name ?? r.author.email}: ${r.body}`).join('\n\n'),
           })),
           { header: true, bom: true },
         ),
@@ -46,7 +50,14 @@ export function toMarkdown(project: Project, comments: CommentDto[]): string {
     list.push(c);
     byPage.set(c.pagePath, list);
   }
-  const lines: string[] = [`# ${project.name} – review comments`, '', `Site: ${project.baseUrl}  `, `Comments: ${comments.length}`, ''];
+  const open = comments.filter((c) => !c.resolvedAt).length;
+  const lines: string[] = [
+    `# ${project.name} – review comments`,
+    '',
+    `Site: ${project.baseUrl}  `,
+    `Comments: ${comments.length} (${open} open, ${comments.length - open} resolved)`,
+    '',
+  ];
   for (const [path, list] of [...byPage.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     lines.push(`## ${path}`, '', `<${project.baseUrl}${path}>`, '');
     for (const c of list) {
@@ -54,7 +65,11 @@ export function toMarkdown(project: Project, comments: CommentDto[]): string {
       const view = c.viewport === 'phone' ? ' _(iPhone 15)_' : '';
       const snippet = c.textSnippet ? ` “${truncate(c.textSnippet, 60)}”` : '';
       const body = c.body.replace(/\r?\n/g, '\n  ');
-      lines.push(`- **${c.author.name ?? c.author.email}** (${formatDate(c.createdAt)})${view} – ${el}${snippet} – ${body}`);
+      const done = c.resolvedAt ? ` ✓ _resolved by ${c.resolvedBy?.name ?? c.resolvedBy?.email ?? 'unknown'}_` : '';
+      lines.push(`- **${c.author.name ?? c.author.email}** (${formatDate(c.createdAt)})${view}${done} – ${el}${snippet} – ${body}`);
+      for (const r of c.replies) {
+        lines.push(`  - ↳ **${r.author.name ?? r.author.email}** (${formatDate(r.createdAt)}) – ${r.body.replace(/\r?\n/g, '\n    ')}`);
+      }
     }
     lines.push('');
   }

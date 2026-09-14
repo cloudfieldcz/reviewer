@@ -28,6 +28,8 @@ public HTTPS can be reviewed the moment an admin adds its URL.
 | **Viewport** | The simulated screen the page is reviewed at: *Desktop* (the frame fills the window) or *iPhone 15* (393 × 852 px, centred in a phone shell). Comments belong to the viewport they were written in. |
 | **Comment** | A note by one person, anchored to one element on one page in one viewport. |
 | **Anchor** | The stored description of the element (CSS selector, XPath, text snippet) used to find it again on later visits. |
+| **Reply** | An answer under a comment. A flat thread, no nesting — replies carry no anchor of their own. |
+| **Resolved** | A comment marked as dealt with. It is kept, with who closed it and when, and stays out of the way until asked for. |
 | **Comment mode** | Review screen state where clicks create comments instead of following links. |
 | **Browse mode** | The opposite: the site behaves normally, so the reviewer can navigate to the page they want to comment on. |
 
@@ -41,8 +43,11 @@ on every request — see [architecture.md](./architecture.md#authentication-and-
 | List projects, open the review screen | ✅ | ✅ |
 | See every comment in a project, with its author | ✅ | ✅ |
 | Add a comment | ✅ | ✅ |
-| Edit / delete **own** comment | ✅ | ✅ |
-| Edit / delete someone else's comment | ❌ | ✅ |
+| Reply to any comment, including someone else's | ✅ | ✅ |
+| Edit / delete **own** comment or reply | ✅ | ✅ |
+| Edit / delete someone else's comment or reply | ❌ | ✅ |
+| Resolve / reopen **own** comment | ✅ | ✅ |
+| Resolve / reopen someone else's comment | ❌ | ✅ |
 | Create / edit / delete a project | ❌ | ✅ |
 | Export comments | ❌ | ✅ |
 | See the user overview | ❌ | ✅ |
@@ -114,14 +119,27 @@ accent colour while comment mode is armed, the cursor over the page turns into a
 chip under the page names the current mode (it spells out what clicking does for a few seconds after
 every switch, and while ⌥ is held). **C** toggles the mode from anywhere, including inside the page.
 
-**Markers.** Every resolved comment gets a numbered circle next to its element. Numbers follow the
-element's position on the page, not the order comments were written, so they read top to bottom like
-the page does. Markers reposition on scroll, resize and DOM changes. Clicking a marker highlights
-the sidebar entry and vice versa.
+**Markers.** Every comment whose element was found gets a numbered circle next to it. Numbers follow
+the element's position on the page, not the order comments were written, so they read top to bottom
+like the page does. Markers reposition on scroll, resize and DOM changes. Clicking a marker
+highlights the sidebar entry and vice versa.
 
 **Sidebar.** Filter *All / Mine*, own comments visually distinct from other people's, edit and
 delete on own entries only, author and timestamp on each. Comments whose element cannot be found are
 listed with an **element not found** flag.
+
+**Replies.** Every comment takes replies from anyone who can see the project — the way a review
+round actually goes: one person writes a note, another answers it. Replies are a flat list under the
+comment, never a tree, and carry no anchor of their own; they belong to the comment, which is what
+points at the element. A reply can be edited or deleted by whoever wrote it (admins: by anyone).
+
+**Resolving.** The author of a comment, or an admin, closes it once it is dealt with — and can
+reopen it. Nothing is deleted: the thread keeps its replies, and the card says who closed it and
+when. Resolved comments drop out of the sidebar and their markers off the page, so what is left is
+what still needs doing; the *All* and *Mine* counts mean *open*. A line above the list says how many
+resolved comments there are and shows them on one click, greyed out, their markers turned into a
+grey ✓. Replying to a resolved comment stays possible — closing a thread ends the work, not the
+conversation.
 
 **Navigation.** Links inside the frame stay inside the proxy. The toolbar shows the current path,
 offers back / forward / reload, and takes a typed path. The path is mirrored into the Reviewer URL
@@ -164,8 +182,8 @@ Admin only, whole project or one page.
 
 | Format | Shape | Use |
 |---|---|---|
-| **Markdown** | Grouped by page, one bullet per comment with author, time, element and body | Paste into an issue or a work order — the main format |
-| **CSV** | `id, created_at, author_name, author_email, page_path, tag_name, text_snippet, selector, body` | Spreadsheets, filtering, sign-off tracking |
+| **Markdown** | Grouped by page, one bullet per comment with author, time, element and body, replies nested under it, resolved ones flagged | Paste into an issue or a work order — the main format |
+| **CSV** | `id, created_at, author_name, author_email, page_path, viewport, tag_name, text_snippet, selector, body, resolved_at, resolved_by, replies, replies_text` | Spreadsheets, filtering, sign-off tracking |
 | **JSON** | Raw dump | Importing into another tool |
 
 ## Scope
@@ -174,7 +192,9 @@ Admin only, whole project or one page.
 
 - Entra ID sign-in, `admin` / `user` roles
 - Admin: project CRUD with a reachability check, comment overview with filters, export
-- User: pick a project, comment, see everyone's comments, edit and delete own
+- User: pick a project, comment, see everyone's comments, edit and delete own, reply to any comment
+- Resolving: the comment author or an admin closes a thread and can reopen it; resolved comments are
+  hidden from the review screen by default and flagged in the export
 - Review screen: hover highlight, `+`, anchored comments, numbered markers, sidebar, in-frame
   navigation with a path bar
 - Comments survive redeploys of the reviewed site
@@ -182,8 +202,8 @@ Admin only, whole project or one page.
 
 **Deliberately not in the MVP**
 
-Replies and threads · a "resolved" state · notifications · screenshots · a mobile layout · Jira or
-GitHub integration · sites behind a login · assigning projects to specific users.
+Nested (threaded) replies · notifications · screenshots · a mobile layout · Jira or GitHub
+integration · sites behind a login · assigning projects to specific users.
 
 Sites with heavy client-side routing and sites requiring a login are outside what the proxy approach
 covers; see the limitations in [architecture.md](./architecture.md#known-limitations).
@@ -192,10 +212,10 @@ covers; see the limitations in [architecture.md](./architecture.md#known-limitat
 
 Roughly in the order they would pay off:
 
-1. Replies and a *resolved* / *done* state — the most common thing missing from a review round.
-2. Per-project user assignment, once more than one client's site is in the same instance.
-3. A screenshot of the element taken when the comment is written (`html2canvas` works, the frame is
+1. Per-project user assignment, once more than one client's site is in the same instance.
+2. A screenshot of the element taken when the comment is written (`html2canvas` works, the frame is
    same-origin) — this makes a comment readable even after its element is gone.
+3. Notifications when someone replies to your comment or resolves it.
 4. Creating issues from the export (webhook or GitHub API) instead of pasting Markdown.
 5. A Playwright snapshot mode for sites where the proxy cannot render the page.
 6. Comparing comments between versions of a site — the stored anchors already allow it.
