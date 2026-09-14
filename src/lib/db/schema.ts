@@ -42,9 +42,12 @@ export const comments = sqliteTable(
     textSnippet: text('text_snippet'),
     tagName: text('tag_name'),
     rectTop: real('rect_top'),
-    /** Set when the thread is closed; null means open. */
-    resolvedAt: text('resolved_at'),
-    resolvedBy: integer('resolved_by').references(() => users.id, { onDelete: 'set null' }),
+    /** 'open' | 'approved' | 'rejected' – the verdict on the comment; SQLite has no enum, `normalizeStatus()` is the gate. */
+    status: text('status').notNull().default('open'),
+    /** When the status was last changed; null while open. */
+    statusAt: text('status_at'),
+    /** Who decided; SET NULL so deleting a user never deletes a verdict. */
+    statusBy: integer('status_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
     updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
   },

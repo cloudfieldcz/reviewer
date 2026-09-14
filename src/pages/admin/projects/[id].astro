@@ -1,6 +1,6 @@
 ---
 import Layout from '~/layouts/Layout.astro';
-import { listComments } from '~/lib/comments';
+import { COMMENT_STATUSES, listComments, type CommentStatus } from '~/lib/comments';
 import { getProject } from '~/lib/projects';
 
 const user = Astro.locals.user;
@@ -15,17 +15,28 @@ try {
   return new Response('Project not found', { status: 404 });
 }
 
-const all = listComments(project.id, undefined, user);
+const all = listComments(project.id, {}, user);
 const pathFilter = Astro.url.searchParams.get('path') ?? '';
 const authorFilter = Astro.url.searchParams.get('author') ?? '';
-const statusFilter = Astro.url.searchParams.get('status') ?? '';
+const rawStatus = Astro.url.searchParams.get('status') ?? '';
+const statusFilter = (COMMENT_STATUSES as readonly string[]).includes(rawStatus) ? (rawStatus as CommentStatus) : '';
 const rows = all.filter(
   (c) =>
     (!pathFilter || c.pagePath === pathFilter) &&
     (!authorFilter || c.author.email === authorFilter) &&
-    (!statusFilter || (statusFilter === 'resolved') === (c.resolvedAt != null)),
+    (!statusFilter || c.status === statusFilter),
 );
-const openCount = all.filter((c) => !c.resolvedAt).length;
+// The overview defaults to everything (an admin needs to see what is undecided); the export defaults
+// to approved (that is what gets handed over). Its counts follow the page filter, not the table's.
+const inPath = pathFilter ? all.filter((c) => c.pagePath === pathFilter) : all;
+const count = (st: CommentStatus) => inPath.filter((c) => c.status === st).length;
+const STATUS_LABEL: Record<CommentStatus, string> = { open: 'Open', approved: 'Approved', rejected: 'Rejected' };
+const STATUS_MARK: Record<CommentStatus, string> = { open: '●', approved: '✓', rejected: '✕' };
+const STATUS_CLASS: Record<CommentStatus, string> = {
+  open: 'text-gray-500',
+  approved: 'rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-800',
+  rejected: 'rounded bg-red-50 px-1.5 py-0.5 font-medium text-red-800',
+};
 const paths = [...new Set(all.map((c) => c.pagePath))].sort();
 const authors = [...new Map(all.map((c) => [c.author.email, c.author])).values()].sort((a, b) => (a.name ?? a.email).localeCompare(b.name ?? b.email));
 
@@ -83,18 +94,24 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
         <label>
           <span class="mb-1.5 block font-medium text-gray-700">Status</span>
           <select name="status" class="input !w-40" onchange="this.form.submit()">
-            <option value="">All ({all.length})</option>
-            <option value="open" selected={statusFilter === 'open'}>Open ({openCount})</option>
-            <option value="resolved" selected={statusFilter === 'resolved'}>Resolved ({all.length - openCount})</option>
+            <option value="">All ({inPath.length})</option>
+            {COMMENT_STATUSES.map((st) => <option value={st} selected={statusFilter === st}>{STATUS_LABEL[st]} ({count(st)})</option>)}
           </select>
         </label>
         {(pathFilter || authorFilter || statusFilter) && <a href={`/admin/projects/${project.id}`} class="btn-ghost">Clear</a>}
       </form>
-      <div class="flex items-center gap-2 text-sm">
-        <span class="text-gray-600">Export{pathFilter ? ' this page' : ' everything'} as</span>
-        <a class="btn-secondary" href={`/api/projects/${project.id}/export?format=md${exportQs}`}>Markdown</a>
-        <a class="btn-secondary" href={`/api/projects/${project.id}/export?format=csv${exportQs}`}>CSV</a>
-        <a class="btn-secondary" href={`/api/projects/${project.id}/export?format=json${exportQs}`}>JSON</a>
+      <div class="flex flex-wrap items-center gap-2 text-sm">
+        <span class="text-gray-600">Export{pathFilter ? ' this page' : ''}</span>
+        <select id="export-status" class="input !w-56" aria-label="Statuses to export">
+          <option value="approved">Approved only ({count('approved')})</option>
+          <option value="approved,rejected">Approved + rejected ({count('approved') + count('rejected')})</option>
+          <option value="open">Open only ({count('open')})</option>
+          <option value="all">Everything ({inPath.length})</option>
+        </select>
+        <span class="text-gray-600">as</span>
+        <a class="btn-secondary export-link" href={`/api/projects/${project.id}/export?format=md&status=approved${exportQs}`}>Markdown</a>
+        <a class="btn-secondary export-link" href={`/api/projects/${project.id}/export?format=csv&status=approved${exportQs}`}>CSV</a>
+        <a class="btn-secondary export-link" href={`/api/projects/${project.id}/export?format=json&status=approved${exportQs}`}>JSON</a>
       </div>
     </section>
 
@@ -139,11 +156,10 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
                 )}
               </td>
               <td class="px-3 py-2.5 whitespace-nowrap text-xs">
-                {c.resolvedAt ? (
-                  <span class="rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-800" title={`Resolved by ${c.resolvedBy?.name ?? c.resolvedBy?.email ?? 'unknown'} on ${fmt(c.resolvedAt)}`}>✓ Resolved</span>
-                ) : (
-                  <span class="text-gray-400">Open</span>
-                )}
+                <span
+                  class={STATUS_CLASS[c.status]}
+                  title={c.status === 'open' ? undefined : `${STATUS_LABEL[c.status]} by ${c.statusBy?.name ?? c.statusBy?.email ?? 'unknown'}${c.statusAt ? ` on ${fmt(c.statusAt)}` : ''}`}
+                >{STATUS_MARK[c.status]} {STATUS_LABEL[c.status]}</span>
               </td>
               <td class="px-3 py-2.5 whitespace-nowrap text-gray-500">{fmt(c.createdAt)}</td>
               <td class="px-3 py-2.5 text-right"><button class="btn-ghost !px-2 !py-0.5 text-red-700 delete-comment" type="button" data-id={c.id}>Delete</button></td>
@@ -180,6 +196,15 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
     const res = await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
     if (res.ok) location.href = '/';
     else say(`Error ${res.status}`, false);
+  });
+
+  const exportStatus = document.getElementById('export-status') as HTMLSelectElement;
+  exportStatus.addEventListener('change', () => {
+    document.querySelectorAll<HTMLAnchorElement>('.export-link').forEach((a) => {
+      const url = new URL(a.href);
+      url.searchParams.set('status', exportStatus.value);
+      a.href = url.toString();
+    });
   });
 
   document.querySelectorAll<HTMLButtonElement>('.delete-comment').forEach((btn) =>

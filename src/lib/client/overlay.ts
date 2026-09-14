@@ -10,7 +10,7 @@ export interface MarkerSpec {
   el: Element;
   mine: boolean;
   active: boolean;
-  resolved: boolean;
+  status: 'open' | 'approved' | 'rejected';
 }
 
 const STYLE = `
@@ -26,10 +26,12 @@ const STYLE = `
 .rz-marker{position:absolute;min-width:22px;height:22px;padding:0 5px;border-radius:11px;background:#71718a;color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;cursor:pointer;pointer-events:auto;box-shadow:0 2px 6px rgba(21,21,29,.3);border:2px solid #fff;transition:transform .08s}
 .rz-marker.mine{background:#6e56cf}
 .rz-marker.active{background:#f59e0b;color:#15151d;transform:scale(1.15)}
-.rz-marker.resolved{background:#9ca3af;opacity:.6}
-.rz-marker.resolved.active{background:#f59e0b;opacity:1}
+.rz-marker.approved{background:#059669;opacity:.7}
+.rz-marker.rejected{background:#dc2626;opacity:.7}
+.rz-marker.approved.active,.rz-marker.rejected.active{background:#f59e0b;color:#15151d;opacity:1}
 .rz-marker:hover{transform:scale(1.12)}
-.rz-outline.resolved{border-color:rgba(156,163,175,.6);opacity:.6}
+.rz-outline.approved{border-color:rgba(5,150,105,.55);opacity:.7}
+.rz-outline.rejected{border-color:rgba(220,38,38,.55);opacity:.7}
 /* Comment mode is felt before it is read: the cursor changes across the whole page. */
 html.rz-picking,html.rz-picking *{cursor:crosshair!important}
 html.rz-picking .rz-plus,html.rz-picking .rz-marker{cursor:pointer!important}
@@ -163,9 +165,10 @@ export class Overlay {
         nodes = { dot, box };
         this.markerNodes.set(m.id, nodes);
       }
-      nodes.dot.textContent = m.resolved ? '✓' : String(m.number);
-      nodes.dot.title = m.resolved ? `Comment #${m.number} – resolved` : `Comment #${m.number}`;
-      const mods = `${m.mine ? ' mine' : ''}${m.resolved ? ' resolved' : ''}${m.active ? ' active' : ''}`;
+      const mark = m.status === 'approved' ? '✓' : m.status === 'rejected' ? '✕' : String(m.number);
+      nodes.dot.textContent = mark;
+      nodes.dot.title = m.status === 'open' ? `Comment #${m.number}` : `Comment #${m.number} – ${m.status}`;
+      const mods = `${m.mine ? ' mine' : ''}${m.status === 'open' ? '' : ` ${m.status}`}${m.active ? ' active' : ''}`;
       nodes.dot.className = `rz-marker${mods}`;
       nodes.box.className = `rz-outline${mods}`;
     }

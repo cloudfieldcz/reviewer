@@ -1,4 +1,4 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import type { AuthUser } from './auth';
 import { db, schema } from './db';
@@ -13,6 +13,21 @@ export type Viewport = 'desktop' | 'phone';
 
 export function normalizeViewport(input: unknown): Viewport {
   return input === 'phone' ? 'phone' : 'desktop';
+}
+
+/** The verdict on a comment. `open` is the working set; `approved` and `rejected` are decided. */
+export type CommentStatus = 'open' | 'approved' | 'rejected';
+
+export const COMMENT_STATUSES: readonly CommentStatus[] = ['open', 'approved', 'rejected'];
+
+/**
+ * Unlike `normalizeViewport`, this throws: a viewport is a display attribute where a wrong value is
+ * harmless, a status is a decision record – coercing "aproved" to `open` would silently reopen a
+ * decided comment while answering 200.
+ */
+export function normalizeStatus(input: unknown): CommentStatus {
+  if (input === 'open' || input === 'approved' || input === 'rejected') return input;
+  throw new HttpError(400, 'status must be open|approved|rejected');
 }
 
 export interface CommentDto {
@@ -30,14 +45,16 @@ export interface CommentDto {
   updatedAt: string;
   author: { id: number; name: string | null; email: string };
   mine: boolean;
-  /** Closed threads stay in the database and in exports; the review screen just hides them by default. */
-  resolvedAt: string | null;
-  resolvedBy: { id: number; name: string | null; email: string } | null;
+  status: CommentStatus;
+  /** When the verdict was given; null while open. */
+  statusAt: string | null;
+  /** Who gave it; null while open or when that user has been deleted. */
+  statusBy: { id: number; name: string | null; email: string } | null;
   replies: ReplyDto[];
 }
 
-/** Second join onto `users`: the author and the person who closed the thread need not be the same. */
-const resolver = alias(schema.users, 'resolver');
+/** Second join onto `users`: the author and the person who decided the comment need not be the same. */
+const statusSetter = alias(schema.users, 'status_setter');
 
 const selectShape = {
   id: schema.comments.id,
@@ -52,48 +69,59 @@ const selectShape = {
   rectTop: schema.comments.rectTop,
   createdAt: schema.comments.createdAt,
   updatedAt: schema.comments.updatedAt,
-  resolvedAt: schema.comments.resolvedAt,
+  status: schema.comments.status,
+  statusAt: schema.comments.statusAt,
   authorId: schema.users.id,
   authorName: schema.users.name,
   authorEmail: schema.users.email,
-  resolverId: resolver.id,
-  resolverName: resolver.name,
-  resolverEmail: resolver.email,
+  setterId: statusSetter.id,
+  setterName: statusSetter.name,
+  setterEmail: statusSetter.email,
 };
 
-
-type Row = Omit<CommentDto, 'author' | 'mine' | 'viewport' | 'resolvedBy' | 'replies'> & {
+type Row = Omit<CommentDto, 'author' | 'mine' | 'viewport' | 'status' | 'statusBy' | 'replies'> & {
   viewport: string;
+  status: string;
   authorId: number;
   authorName: string | null;
   authorEmail: string;
-  resolverId: number | null;
-  resolverName: string | null;
-  resolverEmail: string | null;
+  setterId: number | null;
+  setterName: string | null;
+  setterEmail: string | null;
 };
 
 function toDto(r: Row, viewer: AuthUser, replies: ReplyDto[] = []): CommentDto {
-  const { authorId, authorName, authorEmail, resolverId, resolverName, resolverEmail, viewport, ...rest } = r;
+  const { authorId, authorName, authorEmail, setterId, setterName, setterEmail, viewport, status, ...rest } = r;
   return {
     ...rest,
     viewport: normalizeViewport(viewport),
+    // The column is unconstrained TEXT; anything the app did not write is a bug, not a state to invent.
+    status: normalizeStatus(status),
     author: { id: authorId, name: authorName, email: authorEmail },
     mine: authorId === viewer.id,
-    resolvedBy: resolverId != null && resolverEmail != null ? { id: resolverId, name: resolverName, email: resolverEmail } : null,
+    statusBy: setterId != null && setterEmail != null ? { id: setterId, name: setterName, email: setterEmail } : null,
     replies,
   };
 }
 
-export function listComments(projectId: number, pagePath: string | undefined, viewer: AuthUser): CommentDto[] {
+export interface ListFilter {
+  pagePath?: string;
+  /** Restrict to these statuses; omitted means every status. */
+  statuses?: readonly CommentStatus[];
+}
+
+export function listComments(projectId: number, filter: ListFilter, viewer: AuthUser): CommentDto[] {
   getProject(projectId);
-  const where = pagePath
-    ? and(eq(schema.comments.projectId, projectId), eq(schema.comments.pagePath, pagePath))
-    : eq(schema.comments.projectId, projectId);
+  const where = and(
+    eq(schema.comments.projectId, projectId),
+    filter.pagePath ? eq(schema.comments.pagePath, filter.pagePath) : undefined,
+    filter.statuses ? inArray(schema.comments.status, [...filter.statuses]) : undefined,
+  );
   const rows = db
     .select(selectShape)
     .from(schema.comments)
     .innerJoin(schema.users, eq(schema.users.id, schema.comments.userId))
-    .leftJoin(resolver, eq(resolver.id, schema.comments.resolvedBy))
+    .leftJoin(statusSetter, eq(statusSetter.id, schema.comments.statusBy))
     .where(where)
     .orderBy(asc(schema.comments.pagePath), asc(schema.comments.viewport), asc(schema.comments.rectTop), asc(schema.comments.id))
     .all();
@@ -101,12 +129,25 @@ export function listComments(projectId: number, pagePath: string | undefined, vi
   return rows.map((r) => toDto(r, viewer, replies.get(r.id) ?? []));
 }
 
+/** One grouped query – the export header names what the status filter left out. */
+export function countByStatus(projectId: number, pagePath?: string): Record<CommentStatus, number> {
+  const rows = db
+    .select({ status: schema.comments.status, n: count() })
+    .from(schema.comments)
+    .where(and(eq(schema.comments.projectId, projectId), pagePath ? eq(schema.comments.pagePath, pagePath) : undefined))
+    .groupBy(schema.comments.status)
+    .all();
+  const out: Record<CommentStatus, number> = { open: 0, approved: 0, rejected: 0 };
+  for (const r of rows) out[normalizeStatus(r.status)] = r.n;
+  return out;
+}
+
 export function getComment(id: number, viewer: AuthUser): CommentDto {
   const r = db
     .select(selectShape)
     .from(schema.comments)
     .innerJoin(schema.users, eq(schema.users.id, schema.comments.userId))
-    .leftJoin(resolver, eq(resolver.id, schema.comments.resolvedBy))
+    .leftJoin(statusSetter, eq(statusSetter.id, schema.comments.statusBy))
     .where(eq(schema.comments.id, id))
     .get();
   if (!r) throw new HttpError(404, 'Comment not found');
@@ -161,9 +202,24 @@ export function createComment(input: CommentInput, viewer: AuthUser): CommentDto
   return getComment(row.id, viewer);
 }
 
-function assertCanModify(id: number, viewer: AuthUser): CommentDto {
+/** The author while the comment is still open, or a global admin in any state. */
+function assertCanEdit(id: number, viewer: AuthUser): CommentDto {
   const c = getComment(id, viewer);
-  if (!c.mine && viewer.role !== 'admin') throw new HttpError(403, 'You can only modify your own comments');
+  if (viewer.role === 'admin') return c;
+  if (!c.mine) throw new HttpError(403, 'You can only edit your own comments');
+  if (c.status !== 'open') throw new HttpError(403, 'A decided comment can no longer be edited');
+  return c;
+}
+
+/**
+ * The author while the comment is still open, or a global admin in any state.
+ * Phase 2 widens the manager side to project owners; the author rule stays.
+ */
+function assertCanDelete(id: number, viewer: AuthUser): CommentDto {
+  const c = getComment(id, viewer);
+  if (viewer.role === 'admin') return c;
+  if (!c.mine) throw new HttpError(403, 'You can only delete your own comments');
+  if (c.status !== 'open') throw new HttpError(403, 'A decided comment can no longer be deleted');
   return c;
 }
 
@@ -172,24 +228,32 @@ function sqlNow(): string {
 }
 
 export function updateComment(id: number, body: string, viewer: AuthUser): CommentDto {
-  assertCanModify(id, viewer);
+  assertCanEdit(id, viewer);
   const text = body.trim();
   if (!text) throw new HttpError(400, 'Comment must not be empty');
   db.update(schema.comments).set({ body: text, updatedAt: sqlNow() }).where(eq(schema.comments.id, id)).run();
   return getComment(id, viewer);
 }
 
-/** Close or reopen a thread. Same permission as editing: the comment author or an admin. */
-export function setResolved(id: number, resolved: boolean, viewer: AuthUser): CommentDto {
-  assertCanModify(id, viewer);
+/**
+ * Approve, reject or reopen. A manager action – deliberately NOT guarded by `assertCanEdit`: the
+ * comment's own author has no say in its verdict, otherwise anyone could approve their own comment
+ * straight into the approved-only export. Admin-only until project owners arrive (Phase 2).
+ * Setting the status the comment already holds is a no-op, so `statusAt` records the decision and
+ * not the last click.
+ */
+export function setStatus(id: number, status: CommentStatus, viewer: AuthUser): CommentDto {
+  if (viewer.role !== 'admin') throw new HttpError(403, 'Only a project manager can decide a comment');
+  const c = getComment(id, viewer);
+  if (c.status === status) return c;
   db.update(schema.comments)
-    .set(resolved ? { resolvedAt: sqlNow(), resolvedBy: viewer.id } : { resolvedAt: null, resolvedBy: null })
+    .set(status === 'open' ? { status, statusAt: null, statusBy: null } : { status, statusAt: sqlNow(), statusBy: viewer.id })
     .where(eq(schema.comments.id, id))
     .run();
   return getComment(id, viewer);
 }
 
 export function deleteComment(id: number, viewer: AuthUser): void {
-  assertCanModify(id, viewer);
+  assertCanDelete(id, viewer);
   db.delete(schema.comments).where(eq(schema.comments.id, id)).run();
 }

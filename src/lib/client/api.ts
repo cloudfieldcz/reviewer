@@ -1,7 +1,7 @@
-import type { CommentDto, ReplyDto, Viewport } from '~/lib/comments';
+import type { CommentDto, CommentStatus, ReplyDto, Viewport } from '~/lib/comments';
 import type { Anchor } from './anchor';
 
-export type { CommentDto, ReplyDto, Viewport };
+export type { CommentDto, CommentStatus, ReplyDto, Viewport };
 
 async function call<T>(url: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(url, {
@@ -34,8 +34,8 @@ export const api = {
     }),
   updateComment: (id: number, body: string) => call<CommentDto>(`/api/comments/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) }),
   deleteComment: (id: number) => call<void>(`/api/comments/${id}`, { method: 'DELETE' }),
-  setResolved: (id: number, resolved: boolean) =>
-    call<CommentDto>(`/api/comments/${id}`, { method: 'PATCH', body: JSON.stringify({ resolved }) }),
+  setStatus: (id: number, status: CommentStatus) =>
+    call<CommentDto>(`/api/comments/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   createReply: (commentId: number, body: string) =>
     call<ReplyDto>(`/api/comments/${commentId}/replies`, { method: 'POST', body: JSON.stringify({ body }) }),
   updateReply: (id: number, body: string) => call<ReplyDto>(`/api/replies/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) }),

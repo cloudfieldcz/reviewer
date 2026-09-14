@@ -4,7 +4,7 @@ import type { AuthUser } from '~/lib/auth';
 
 process.env.DATABASE_PATH = ':memory:';
 const { db, schema } = await import('~/lib/db');
-const { createComment, getComment, listComments, setResolved } = await import('~/lib/comments');
+const { countByStatus, createComment, deleteComment, getComment, listComments, normalizeStatus, setStatus, updateComment } = await import('~/lib/comments');
 const { createReply, deleteReply, updateReply } = await import('~/lib/replies');
 
 const anna: AuthUser = { id: 1, oid: 'oid-1', email: 'anna@example.com', name: 'Anna', role: 'user' };
@@ -54,7 +54,7 @@ describe('replies', () => {
     createReply(a.id, 'on one', bob);
     createReply(b.id, 'on two', anna);
     createReply(b.id, 'also on two', anna);
-    const byBody = Object.fromEntries(listComments(1, '/', anna).map((c) => [c.body, c.replies.map((r) => r.body)]));
+    const byBody = Object.fromEntries(listComments(1, { pagePath: '/' }, anna).map((c) => [c.body, c.replies.map((r) => r.body)]));
     expect(byBody.one).toEqual(['on one']);
     expect(byBody.two).toEqual(['on two', 'also on two']);
   });
@@ -78,48 +78,138 @@ describe('replies', () => {
     expect(getComment(c.id, anna).replies).toHaveLength(0);
   });
 
-  it('keeps replies when the thread is resolved, drops them when the comment is deleted', () => {
+  it('keeps replies when the comment is decided, drops them when the comment is deleted', () => {
     const c = comment(anna);
     createReply(c.id, 'still here', bob);
-    setResolved(c.id, true, anna);
+    setStatus(c.id, 'approved', root);
     expect(getComment(c.id, anna).replies).toHaveLength(1);
     db.delete(schema.comments).where(eq(schema.comments.id, c.id)).run();
     expect(db.select().from(schema.commentReplies).all()).toHaveLength(0);
   });
 });
 
-describe('resolving', () => {
-  it('lets the comment author close and reopen the thread', () => {
-    const c = comment(anna);
-    expect(c.resolvedAt).toBeNull();
-    const closed = setResolved(c.id, true, anna);
-    expect(closed.resolvedAt).not.toBeNull();
-    expect(closed.resolvedBy?.email).toBe(anna.email);
-    const reopened = setResolved(c.id, false, anna);
-    expect(reopened.resolvedAt).toBeNull();
-    expect(reopened.resolvedBy).toBeNull();
+describe('normalizeStatus', () => {
+  it('accepts exactly the three statuses', () => {
+    expect(normalizeStatus('open')).toBe('open');
+    expect(normalizeStatus('approved')).toBe('approved');
+    expect(normalizeStatus('rejected')).toBe('rejected');
   });
 
-  it('lets an admin close someone else’s comment', () => {
+  it('throws 400 instead of coercing – a typo must not silently reopen a decided comment', () => {
+    for (const bad of ['aproved', 'resolved', '', null, undefined, true, 1, 'OPEN']) {
+      expect(() => normalizeStatus(bad)).toThrow(expect.objectContaining({ status: 400 }));
+    }
+  });
+});
+
+describe('status', () => {
+  it('starts open with no decider', () => {
     const c = comment(anna);
-    expect(setResolved(c.id, true, root).resolvedBy?.email).toBe(root.email);
+    expect(c.status).toBe('open');
+    expect(c.statusAt).toBeNull();
+    expect(c.statusBy).toBeNull();
   });
 
-  it('refuses to let an unrelated user close the comment', () => {
+  it('lets an admin approve, records who and when, and reopen clears both', () => {
     const c = comment(anna);
-    expect(() => setResolved(c.id, true, bob)).toThrow(/own/i);
+    const approved = setStatus(c.id, 'approved', root);
+    expect(approved.status).toBe('approved');
+    expect(approved.statusAt).not.toBeNull();
+    expect(approved.statusBy?.email).toBe(root.email);
+    const reopened = setStatus(c.id, 'open', root);
+    expect(reopened.status).toBe('open');
+    expect(reopened.statusAt).toBeNull();
+    expect(reopened.statusBy).toBeNull();
   });
 
-  it('leaves the resolver recorded on the listed comment', () => {
+  it('lets an admin reject', () => {
     const c = comment(anna);
-    setResolved(c.id, true, root);
-    const listed = listComments(1, '/', bob)[0]!;
-    expect(listed.resolvedBy?.name).toBe('Root');
-    expect(listed.resolvedAt).toBe(listed.resolvedAt);
+    expect(setStatus(c.id, 'rejected', root).status).toBe('rejected');
   });
 
-  it('does not touch the comment body timestamp semantics', () => {
+  it('refuses the comment author – nobody approves their own comment into the export', () => {
     const c = comment(anna);
-    expect(setResolved(c.id, true, anna).body).toBe('fix this');
+    expect(() => setStatus(c.id, 'approved', anna)).toThrow(expect.objectContaining({ status: 403 }));
+    expect(getComment(c.id, anna).status).toBe('open');
+  });
+
+  it('refuses an unrelated non-admin user', () => {
+    const c = comment(anna);
+    expect(() => setStatus(c.id, 'rejected', bob)).toThrow(expect.objectContaining({ status: 403 }));
+  });
+
+  it('is a no-op when the status is already the requested one – statusAt records the decision, not the last click', () => {
+    const c = comment(anna);
+    db.update(schema.comments).set({ status: 'approved', statusAt: '2026-01-01 00:00:00', statusBy: root.id }).where(eq(schema.comments.id, c.id)).run();
+    const again = setStatus(c.id, 'approved', root);
+    expect(again.statusAt).toBe('2026-01-01 00:00:00');
+  });
+
+  it('carries the decider on the listed comment', () => {
+    const c = comment(anna);
+    setStatus(c.id, 'approved', root);
+    const listed = listComments(1, { pagePath: '/' }, bob)[0]!;
+    expect(listed.statusBy?.name).toBe('Root');
+    expect(listed.status).toBe('approved');
+  });
+
+  it('keeps the verdict when the decider is deleted', () => {
+    const c = comment(anna);
+    setStatus(c.id, 'approved', root);
+    db.delete(schema.users).where(eq(schema.users.id, root.id)).run();
+    const after = getComment(c.id, anna);
+    expect(after.status).toBe('approved');
+    expect(after.statusBy).toBeNull();
+  });
+
+  it('does not touch the body', () => {
+    const c = comment(anna);
+    expect(setStatus(c.id, 'approved', root).body).toBe('fix this');
+  });
+});
+
+describe('editing and deleting under a verdict', () => {
+  it('lets the author edit and delete their own comment while open', () => {
+    const c = comment(anna);
+    expect(updateComment(c.id, 'edited', anna).body).toBe('edited');
+    deleteComment(c.id, anna);
+    expect(() => getComment(c.id, anna)).toThrow(/not found/i);
+  });
+
+  it('refuses the author both once the comment is decided', () => {
+    const c = comment(anna);
+    setStatus(c.id, 'approved', root);
+    expect(() => updateComment(c.id, 'rewritten', anna)).toThrow(expect.objectContaining({ status: 403 }));
+    expect(() => deleteComment(c.id, anna)).toThrow(expect.objectContaining({ status: 403 }));
+    expect(getComment(c.id, anna).body).toBe('fix this');
+  });
+
+  it('refuses a stranger in any state', () => {
+    const c = comment(anna);
+    expect(() => updateComment(c.id, 'x', bob)).toThrow(expect.objectContaining({ status: 403 }));
+    expect(() => deleteComment(c.id, bob)).toThrow(expect.objectContaining({ status: 403 }));
+  });
+
+  it('lets an admin edit and delete in any state', () => {
+    const c = comment(anna);
+    setStatus(c.id, 'rejected', root);
+    expect(updateComment(c.id, 'admin edit', root).body).toBe('admin edit');
+    deleteComment(c.id, root);
+    expect(() => getComment(c.id, anna)).toThrow(/not found/i);
+  });
+});
+
+describe('listing by status', () => {
+  it('filters in the query and counts every status for the header', () => {
+    const a = comment(anna, 'a');
+    const b = comment(anna, 'b');
+    comment(bob, 'c');
+    setStatus(a.id, 'approved', root);
+    setStatus(b.id, 'rejected', root);
+    expect(listComments(1, { statuses: ['approved'] }, anna).map((c) => c.body)).toEqual(['a']);
+    expect(listComments(1, { statuses: ['approved', 'rejected'] }, anna).map((c) => c.body).sort()).toEqual(['a', 'b']);
+    expect(listComments(1, {}, anna)).toHaveLength(3);
+    expect(countByStatus(1)).toEqual({ open: 1, approved: 1, rejected: 1 });
+    expect(countByStatus(1, '/nowhere')).toEqual({ open: 0, approved: 0, rejected: 0 });
   });
 });

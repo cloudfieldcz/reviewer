@@ -7,7 +7,7 @@ export const GET: APIRoute = handler((ctx) => {
   if (!Number.isInteger(project) || project <= 0) throw new HttpError(400, 'project is required');
   const rawPath = ctx.url.searchParams.get('path');
   const path = rawPath == null ? undefined : normalizePagePath(rawPath);
-  return json(listComments(project, path, ctx.locals.user));
+  return json(listComments(project, { pagePath: path }, ctx.locals.user));
 });
 
 export const POST: APIRoute = handler(async (ctx) => {

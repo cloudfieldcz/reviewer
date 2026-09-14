@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { computeAnchor, isReviewerNode, pickMeaningful, resolveAnchor, type Anchor, type ResolveMethod } from '~/lib/client/anchor';
-  import { api, type CommentDto, type ReplyDto, type Viewport } from '~/lib/client/api';
+  import { api, type CommentDto, type CommentStatus, type ReplyDto, type Viewport } from '~/lib/client/api';
   import { Overlay } from '~/lib/client/overlay';
 
   interface Props {
@@ -39,8 +39,15 @@
   let editing = $state<{ id: number; body: string; saving: boolean } | null>(null);
   let replying = $state<{ commentId: number; body: string; saving: boolean } | null>(null);
   let editingReply = $state<{ id: number; commentId: number; body: string; saving: boolean } | null>(null);
-  /** Resolved threads are kept but stay out of the way until asked for – in the list and in the page. */
-  let showResolved = $state(false);
+  /**
+   * Which statuses are listed and drawn. Decided comments (approved / rejected) are kept but stay out
+   * of the way until asked for; `open` is the working set.
+   */
+  let statusFilter = $state<Record<CommentStatus, boolean>>({ open: true, approved: false, rejected: false });
+  const STATUS_LABEL: Record<CommentStatus, string> = { open: 'Open', approved: 'Approved', rejected: 'Rejected' };
+  const STATUS_MARK: Record<CommentStatus, string> = { open: '●', approved: '✓', rejected: '✕' };
+  /** Rendering hint only – the server decides in setStatus / delete. Becomes a prop with project owners. */
+  const canManage = $derived(user.role === 'admin');
   let error = $state<string | null>(null);
   let loading = $state(true);
   let frameError = $state(false);
@@ -74,18 +81,27 @@
   const forDevice = $derived(comments.filter((c) => c.viewport === device));
   const otherCount = $derived(comments.length - forDevice.length);
 
-  const openForDevice = $derived(forDevice.filter((c) => !c.resolvedAt));
-  const resolvedCount = $derived(forDevice.length - openForDevice.length);
+  const countByStatus = $derived.by(() => {
+    const n: Record<CommentStatus, number> = { open: 0, approved: 0, rejected: 0 };
+    for (const c of forDevice) n[c.status]++;
+    return n;
+  });
+  const hiddenCount = $derived(forDevice.filter((c) => !statusFilter[c.status]).length);
+  /**
+   * Comments in the chosen statuses. A comment being replied to or edited stays until the composer
+   * closes, so rejecting (which opens the reply box for the reason) does not pull the card away.
+   */
+  const inStatus = $derived(forDevice.filter((c) => statusFilter[c.status] || replying?.commentId === c.id || editing?.id === c.id));
 
   const visible = $derived.by(() => {
     void resolved; // element positions change whenever anchors are re-resolved
-    return forDevice
-      .filter((c) => (filter === 'all' || c.mine) && (showResolved || !c.resolvedAt))
+    return inStatus
+      .filter((c) => filter === 'all' || c.mine)
       .map((c) => ({ ...c, order: liveTop(c) }))
       .sort((a, b) => a.order - b.order || a.id - b.id);
   });
   const numberOf = $derived(new Map(visible.map((c, i) => [c.id, i + 1])));
-  const mineCount = $derived(openForDevice.filter((c) => c.mine).length);
+  const mineCount = $derived(inStatus.filter((c) => c.mine).length);
 
   function liveTop(c: CommentDto): number {
     const el = elements.get(c.id);
@@ -313,7 +329,7 @@
           el: elements.get(c.id)!,
           mine: c.mine,
           active: c.id === activeId,
-          resolved: c.resolvedAt != null,
+          status: c.status,
         })),
     );
   }
@@ -417,13 +433,18 @@
     }
   }
 
-  // ---- resolving ------------------------------------------------------------
-  async function toggleResolved(c: CommentDto) {
+  // ---- verdict --------------------------------------------------------------
+  /** Approve, reject or reopen. Rejecting opens the reply box so the reason lands in the thread. */
+  async function decide(c: CommentDto, status: CommentStatus) {
     try {
-      const updated = await api.setResolved(c.id, c.resolvedAt == null);
+      const updated = await api.setStatus(c.id, status);
       comments = comments.map((x) => (x.id === updated.id ? updated : x));
-      // A freshly closed thread drops out of the list unless resolved ones are shown.
-      if (updated.resolvedAt && !showResolved) {
+      if (status === 'rejected') {
+        await startReply(updated);
+        return;
+      }
+      // A freshly decided comment drops out of the list unless its status is shown.
+      if (!statusFilter[updated.status]) {
         if (activeId === c.id) activeId = null;
         if (replying?.commentId === c.id) replying = null;
         if (editing?.id === c.id) editing = null;
@@ -799,24 +820,31 @@
             >{deviceLabel}</span>
           </div>
           <div class="seg" role="group" aria-label="Filter comments">
-            <button class={filter === 'all' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'all')} aria-pressed={filter === 'all'}>All {openForDevice.length}</button>
+            <button class={filter === 'all' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'all')} aria-pressed={filter === 'all'}>All {inStatus.length}</button>
             <button class={filter === 'mine' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'mine')} aria-pressed={filter === 'mine'}>Mine {mineCount}</button>
           </div>
         </div>
         <p class="meta mt-1 truncate" title={project.baseUrl + path}>{path}</p>
-        {#if resolvedCount > 0}
-          <button
-            class={[
-              'mt-1.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] font-medium transition-colors',
-              showResolved ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
-            ]}
-            onclick={() => (showResolved = !showResolved)}
-            aria-pressed={showResolved}
-          >
-            <span aria-hidden="true">✓</span>
-            {resolvedCount} resolved – {showResolved ? 'hide' : 'show'}
-          </button>
-        {/if}
+        <div class="mt-1.5 flex gap-1" role="group" aria-label="Filter by status">
+          {#each ['open', 'approved', 'rejected'] as const as st (st)}
+            {@const on = statusFilter[st]}
+            <button
+              class={[
+                'flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors',
+                on && st === 'open' ? 'bg-gray-700 text-white hover:bg-gray-800' : '',
+                on && st === 'approved' ? 'bg-emerald-600 text-white hover:bg-emerald-700' : '',
+                on && st === 'rejected' ? 'bg-red-600 text-white hover:bg-red-700' : '',
+                !on ? 'bg-gray-100 text-gray-500 hover:bg-gray-200' : '',
+              ]}
+              onclick={() => (statusFilter = { ...statusFilter, [st]: !on })}
+              aria-pressed={on}
+              title={`${on ? 'Hide' : 'Show'} ${STATUS_LABEL[st].toLowerCase()} comments`}
+            >
+              <span aria-hidden="true">{STATUS_MARK[st]}</span>
+              {STATUS_LABEL[st]} {countByStatus[st]}
+            </button>
+          {/each}
+        </div>
         {#if otherCount > 0}
           <button
             class="mt-1.5 flex w-full items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-left text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-100"
@@ -867,8 +895,8 @@
               {filter === 'mine' ? 'Nothing from you here' : 'No comments here'}
             </p>
             <p class="mt-0.5 text-xs text-gray-400">{path} · {deviceLabel}</p>
-            {#if resolvedCount > 0 && !showResolved}
-              <p class="mt-1 text-xs text-gray-500">{resolvedCount} resolved {resolvedCount === 1 ? 'comment is' : 'comments are'} hidden.</p>
+            {#if hiddenCount > 0}
+              <p class="mt-1 text-xs text-gray-500">{hiddenCount} {hiddenCount === 1 ? 'comment is' : 'comments are'} hidden by the status filter.</p>
             {/if}
             <p class="mt-1 text-xs text-gray-500">
               {#if commentMode}
@@ -882,14 +910,14 @@
 
         {#each visible as c (c.id)}
           {@const found = resolved[c.id] != null}
-          {@const canEdit = c.mine || user.role === 'admin'}
+          {@const decided = c.status !== 'open'}
+          {@const canEdit = user.role === 'admin' || (c.mine && !decided)}
           {@const isActive = activeId === c.id}
-          {@const isResolved = c.resolvedAt != null}
           <article
             data-cid={c.id}
             class={[
               'group relative cursor-pointer overflow-hidden rounded-lg border p-3 pl-3.5 shadow-card transition-all',
-              isResolved ? 'bg-gray-50' : 'bg-white',
+              decided ? 'bg-gray-50' : 'bg-white',
               isActive ? 'border-amber-400 ring-2 ring-amber-400/30' : 'border-gray-200 hover:border-gray-300 hover:shadow-pop',
             ]}
             role="button"
@@ -897,12 +925,12 @@
             onclick={() => focusComment(c.id, { scrollFrame: true })}
             onkeydown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) focusComment(c.id, { scrollFrame: true }); }}
           >
-            <span class={['absolute inset-y-0 left-0 w-1', isActive ? 'bg-amber-400' : isResolved ? 'bg-gray-300' : c.mine ? 'bg-brand' : 'bg-gray-400']}></span>
+            <span class={['absolute inset-y-0 left-0 w-1', isActive ? 'bg-amber-400' : c.status === 'approved' ? 'bg-emerald-300' : c.status === 'rejected' ? 'bg-red-300' : c.mine ? 'bg-brand' : 'bg-gray-400']}></span>
 
             <div class="mb-1.5 flex items-start justify-between gap-2">
               <div class="flex min-w-0 items-center gap-2">
-                <span class={['inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-semibold tabular-nums', isActive ? 'bg-amber-400 text-gray-900' : isResolved ? 'bg-gray-400 text-white' : c.mine ? 'bg-brand text-white' : 'bg-gray-500 text-white']}>
-                  {isResolved ? '✓' : numberOf.get(c.id)}
+                <span class={['inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-semibold tabular-nums', isActive ? 'bg-amber-400 text-gray-900' : c.status === 'approved' ? 'bg-emerald-600/70 text-white' : c.status === 'rejected' ? 'bg-red-600/70 text-white' : c.mine ? 'bg-brand text-white' : 'bg-gray-500 text-white']}>
+                  {decided ? STATUS_MARK[c.status] : numberOf.get(c.id)}
                 </span>
                 <span class="truncate text-sm font-medium" title={c.author.email}>{c.mine ? 'You' : (c.author.name ?? c.author.email)}</span>
               </div>
@@ -924,11 +952,11 @@
               </p>
             {/if}
 
-            {#if isResolved}
-              <p class="mb-2 inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800">
-                <span aria-hidden="true">✓</span>
-                Resolved by {c.resolvedBy?.id === user.id ? 'you' : (c.resolvedBy?.name ?? c.resolvedBy?.email ?? 'someone')}
-                <time datetime={c.resolvedAt} title={fmt(c.resolvedAt!)}>· {ago(c.resolvedAt!)}</time>
+            {#if decided}
+              <p class={['mb-2 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium', c.status === 'approved' ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-800']}>
+                <span aria-hidden="true">{STATUS_MARK[c.status]}</span>
+                {STATUS_LABEL[c.status]} by {c.statusBy?.id === user.id ? 'you' : (c.statusBy?.name ?? c.statusBy?.email ?? 'someone')}
+                {#if c.statusAt}<time datetime={c.statusAt} title={fmt(c.statusAt)}>· {ago(c.statusAt)}</time>{/if}
               </p>
             {/if}
 
@@ -939,7 +967,7 @@
                 <button class="btn-primary" onclick={(e) => { e.stopPropagation(); saveEdit(); }} disabled={editing.saving || !editing.body.trim()}>Save</button>
               </div>
             {:else}
-              <p class={['whitespace-pre-wrap text-sm leading-relaxed', isResolved ? 'text-gray-500' : 'text-gray-800']}>{c.body}</p>
+              <p class={['whitespace-pre-wrap text-sm leading-relaxed', decided ? 'text-gray-500' : 'text-gray-800']}>{c.body}</p>
             {/if}
 
             {#if c.replies.length > 0}
@@ -995,11 +1023,15 @@
               <div class="mt-2 flex items-center justify-between gap-1 text-xs">
                 <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startReply(c); }}>Reply</button>
                 <div class="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                  {#if canManage}
+                    {#if decided}
+                      <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); decide(c, 'open'); }}>Reopen</button>
+                    {:else}
+                      <button class="btn-ghost !px-2 !py-0.5 !text-xs text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800" onclick={(e) => { e.stopPropagation(); decide(c, 'approved'); }}>Approve</button>
+                      <button class="btn-ghost !px-2 !py-0.5 !text-xs text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); decide(c, 'rejected'); }}>Reject</button>
+                    {/if}
+                  {/if}
                   {#if canEdit}
-                    <button
-                      class={['btn-ghost !px-2 !py-0.5 !text-xs', isResolved ? '' : 'text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800']}
-                      onclick={(e) => { e.stopPropagation(); toggleResolved(c); }}
-                    >{isResolved ? 'Reopen' : 'Resolve'}</button>
                     <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startEdit(c); }}>Edit</button>
                     <button class="btn-ghost !px-2 !py-0.5 !text-xs text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); remove(c); }}>Delete</button>
                   {/if}
