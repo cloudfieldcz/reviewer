@@ -6,20 +6,26 @@ process.env.DATABASE_PATH = ':memory:';
 const { db, schema } = await import('~/lib/db');
 const { countByStatus, createComment, deleteComment, getComment, listComments, normalizeStatus, setStatus, updateComment } = await import('~/lib/comments');
 const { createReply, deleteReply, updateReply } = await import('~/lib/replies');
+const { setOwners } = await import('~/lib/access');
 
 const anna: AuthUser = { id: 1, oid: 'oid-1', email: 'anna@example.com', name: 'Anna', role: 'user' };
 const bob: AuthUser = { id: 2, oid: 'oid-2', email: 'bob@example.com', name: 'Bob', role: 'user' };
 const root: AuthUser = { id: 3, oid: 'oid-3', email: 'root@example.com', name: 'Root', role: 'admin' };
+/** Owner of project 1 only – a plain `user` role, rights come from `project_owners`. */
+const olga: AuthUser = { id: 4, oid: 'oid-4', email: 'olga@example.com', name: 'Olga', role: 'user' };
 
 beforeEach(() => {
+  db.delete(schema.projectOwners).run();
   db.delete(schema.commentReplies).run();
   db.delete(schema.comments).run();
   db.delete(schema.projects).run();
   db.delete(schema.users).run();
-  for (const u of [anna, bob, root]) {
+  for (const u of [anna, bob, root, olga]) {
     db.insert(schema.users).values({ id: u.id, oid: u.oid, email: u.email, name: u.name, role: u.role }).run();
   }
   db.insert(schema.projects).values({ id: 1, name: 'site', baseUrl: 'https://site.example.com', createdBy: anna.id }).run();
+  db.insert(schema.projects).values({ id: 2, name: 'other', baseUrl: 'https://other.example.com', createdBy: anna.id }).run();
+  setOwners(1, [olga.id], root);
 });
 
 const comment = (author: AuthUser, body = 'fix this') =>
@@ -68,7 +74,7 @@ describe('replies', () => {
     expect(() => createReply(999, 'hello', bob)).toThrow(/not found/i);
   });
 
-  it('lets only the reply author or an admin edit and delete it', () => {
+  it('lets only the reply author or a project manager edit and delete it', () => {
     const c = comment(anna);
     const r = createReply(c.id, 'mine', bob);
     expect(() => updateReply(r.id, 'edited', anna)).toThrow(/own/i);
@@ -76,6 +82,23 @@ describe('replies', () => {
     expect(updateReply(r.id, 'edited', bob).body).toBe('edited');
     deleteReply(r.id, root);
     expect(getComment(c.id, anna).replies).toHaveLength(0);
+  });
+
+  it('lets the project owner delete someone else’s reply; an owner of another project cannot', () => {
+    const c = comment(anna);
+    const r = createReply(c.id, 'spam', bob);
+    const elsewhere = createComment({ projectId: 2, pagePath: '/', viewport: 'desktop', body: 'x' }, anna);
+    const r2 = createReply(elsewhere.id, 'spam', bob);
+    expect(() => deleteReply(r2.id, olga)).toThrow(expect.objectContaining({ status: 403 }));
+    deleteReply(r.id, olga);
+    expect(getComment(c.id, anna).replies).toHaveLength(0);
+  });
+
+  it('lets a reply author edit their reply whatever the comment status', () => {
+    const c = comment(anna);
+    const r = createReply(c.id, 'first', bob);
+    setStatus(c.id, 'rejected', olga);
+    expect(updateReply(r.id, 'second', bob).body).toBe('second');
   });
 
   it('keeps replies when the comment is decided, drops them when the comment is deleted', () => {
@@ -138,6 +161,22 @@ describe('status', () => {
     expect(() => setStatus(c.id, 'rejected', bob)).toThrow(expect.objectContaining({ status: 403 }));
   });
 
+  it('lets the project owner reject; an owner of a different project gets 403', () => {
+    const c = comment(anna);
+    const elsewhere = createComment({ projectId: 2, pagePath: '/', viewport: 'desktop', body: 'x' }, anna);
+    expect(() => setStatus(elsewhere.id, 'rejected', olga)).toThrow(expect.objectContaining({ status: 403 }));
+    const rejected = setStatus(c.id, 'rejected', olga);
+    expect(rejected.status).toBe('rejected');
+    expect(rejected.statusBy?.email).toBe(olga.email);
+  });
+
+  it('checks the permission before the value – a reviewer with a typo gets 403, a manager 400', () => {
+    const c = comment(anna);
+    expect(() => setStatus(c.id, 'aproved', anna)).toThrow(expect.objectContaining({ status: 403 }));
+    expect(() => setStatus(c.id, 'aproved', olga)).toThrow(expect.objectContaining({ status: 400 }));
+    expect(getComment(c.id, anna).status).toBe('open');
+  });
+
   it('is a no-op when the status is already the requested one – statusAt records the decision, not the last click', () => {
     const c = comment(anna);
     db.update(schema.comments).set({ status: 'approved', statusAt: '2026-01-01 00:00:00', statusBy: root.id }).where(eq(schema.comments.id, c.id)).run();
@@ -188,6 +227,23 @@ describe('editing and deleting under a verdict', () => {
     const c = comment(anna);
     expect(() => updateComment(c.id, 'x', bob)).toThrow(expect.objectContaining({ status: 403 }));
     expect(() => deleteComment(c.id, bob)).toThrow(expect.objectContaining({ status: 403 }));
+  });
+
+  it('lets the owner delete someone else’s comment and their own decided one, but edit neither', () => {
+    const theirs = comment(anna);
+    const own = comment(olga, 'my own');
+    setStatus(own.id, 'approved', root);
+    expect(() => updateComment(theirs.id, 'x', olga)).toThrow(expect.objectContaining({ status: 403 }));
+    expect(() => updateComment(own.id, 'x', olga)).toThrow(expect.objectContaining({ status: 403 }));
+    deleteComment(theirs.id, olga);
+    deleteComment(own.id, olga);
+    expect(listComments(1, {}, olga)).toHaveLength(0);
+  });
+
+  it('holds the owner to the open-only rule on another project, where they are a plain reviewer', () => {
+    const c = createComment({ projectId: 2, pagePath: '/', viewport: 'desktop', body: 'x' }, olga);
+    setStatus(c.id, 'approved', root);
+    expect(() => deleteComment(c.id, olga)).toThrow(expect.objectContaining({ status: 403 }));
   });
 
   it('lets an admin edit and delete in any state', () => {

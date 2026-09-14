@@ -1,15 +1,31 @@
 import { desc, eq, sql } from 'drizzle-orm';
+import { managedProjects } from './access';
+import type { AuthUser } from './auth';
 import { db, schema } from './db';
 import type { Project } from './db/schema';
 import { HttpError } from './http';
 import { fetchTarget } from './proxy/fetch';
 import { assertPublicHost, normalizeBaseUrl } from './url';
 
-export function listProjects() {
+export interface ProjectTile {
+  id: number;
+  name: string;
+  baseUrl: string;
+  createdAt: string;
+  commentCount: number;
+  lastCommentAt: string | null;
+  /** Rendering hint for the tile; the API routes decide for real. */
+  canManage: boolean;
+}
+
+export function listProjects(viewer: AuthUser): ProjectTile[] {
   // Aggregate over a join instead of correlated subqueries: inside a subquery drizzle renders
   // `schema.projects.id` as a bare `"id"`, which SQLite would resolve against `comments` instead.
+  // `project_owners` is NOT joined here – a second join would fan `commentCount` out by the owner
+  // count. One indexed query, then `canManage` in memory.
+  const managed = managedProjects(viewer);
   const lastCommentAt = sql<string | null>`max(${schema.comments.createdAt})`;
-  return db
+  const rows = db
     .select({
       id: schema.projects.id,
       name: schema.projects.name,
@@ -24,6 +40,7 @@ export function listProjects() {
     // Most recently touched project first – that is the one people come back to.
     .orderBy(desc(sql`coalesce(${lastCommentAt}, ${schema.projects.createdAt})`))
     .all();
+  return rows.map((r) => ({ ...r, canManage: managed === 'all' || managed.has(r.id) }));
 }
 
 export function getProject(id: number): Project {

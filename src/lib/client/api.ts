@@ -1,7 +1,8 @@
+import type { ProjectAccess } from '~/lib/access';
 import type { CommentDto, CommentStatus, ReplyDto, Viewport } from '~/lib/comments';
 import type { Anchor } from './anchor';
 
-export type { CommentDto, CommentStatus, ReplyDto, Viewport };
+export type { CommentDto, CommentStatus, ProjectAccess, ReplyDto, Viewport };
 
 async function call<T>(url: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(url, {

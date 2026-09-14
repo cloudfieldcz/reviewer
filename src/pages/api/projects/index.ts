@@ -2,7 +2,7 @@ import type { APIRoute } from 'astro';
 import { handler, json, readJson, requireAdmin, str } from '~/lib/http';
 import { createProject, listProjects } from '~/lib/projects';
 
-export const GET: APIRoute = handler(() => json(listProjects()));
+export const GET: APIRoute = handler((ctx) => json(listProjects(ctx.locals.user)));
 
 export const POST: APIRoute = handler(async (ctx) => {
   requireAdmin(ctx);

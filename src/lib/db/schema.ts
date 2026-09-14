@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -79,7 +79,29 @@ export const commentReplies = sqliteTable(
   (t) => [index('comment_replies_comment_idx').on(t.commentId)],
 );
 
+/**
+ * Who may decide a project's comments without being a global admin. A membership fact keyed on
+ * `users.id`, not a copy of a role – the global role still comes from the oauth2-proxy headers on
+ * every request. Ownership grants rights on one project's comments, never access to the app.
+ */
+export const projectOwners = sqliteTable(
+  'project_owners',
+  {
+    projectId: integer('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    addedAt: text('added_at').notNull().default(sql`(datetime('now'))`),
+    /** Who granted it – a privilege grant is the one thing worth a trace. */
+    addedBy: integer('added_by').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId] }), index('project_owners_user_idx').on(t.userId)],
+);
+
 export type User = typeof users.$inferSelect;
 export type Project = typeof projects.$inferSelect;
 export type Comment = typeof comments.$inferSelect;
 export type CommentReply = typeof commentReplies.$inferSelect;
+export type ProjectOwner = typeof projectOwners.$inferSelect;

@@ -1,11 +1,13 @@
 ---
+import { asc } from 'drizzle-orm';
 import Layout from '~/layouts/Layout.astro';
+import { listOwners, projectAccess } from '~/lib/access';
 import { COMMENT_STATUSES, listComments, type CommentStatus } from '~/lib/comments';
+import { db, schema } from '~/lib/db';
 import { getProject } from '~/lib/projects';
 
+// Not under /admin/: owners reach this page too, and /admin/* keeps meaning "global admin only".
 const user = Astro.locals.user;
-if (user.role !== 'admin') return new Response('Forbidden', { status: 403 });
-
 const id = Number(Astro.params.id);
 if (!Number.isInteger(id)) return Astro.redirect('/');
 let project;
@@ -14,6 +16,16 @@ try {
 } catch {
   return new Response('Project not found', { status: 404 });
 }
+const access = projectAccess(project.id, user);
+if (access === 'reviewer') return new Response('Forbidden', { status: 403 });
+const isAdmin = access === 'admin';
+
+const owners = listOwners(project.id);
+// The user directory is fetched ONLY for admins. Serialising it for an owner would hand every
+// project owner the whole internal directory, which is otherwise reachable only at /admin/users.
+const directory = isAdmin
+  ? db.select({ id: schema.users.id, name: schema.users.name, email: schema.users.email }).from(schema.users).orderBy(asc(schema.users.name), asc(schema.users.email)).all()
+  : null;
 
 const all = listComments(project.id, {}, user);
 const pathFilter = Astro.url.searchParams.get('path') ?? '';
@@ -26,7 +38,7 @@ const rows = all.filter(
     (!authorFilter || c.author.email === authorFilter) &&
     (!statusFilter || c.status === statusFilter),
 );
-// The overview defaults to everything (an admin needs to see what is undecided); the export defaults
+// The overview defaults to everything (a manager needs to see what is undecided); the export defaults
 // to approved (that is what gets handed over). Its counts follow the page filter, not the table's.
 const inPath = pathFilter ? all.filter((c) => c.pagePath === pathFilter) : all;
 const count = (st: CommentStatus) => inPath.filter((c) => c.status === st).length;
@@ -45,7 +57,7 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
 ---
 
 <Layout title={`Manage · ${project.name}`}>
-  <main class="mx-auto max-w-6xl px-4 py-8">
+  <main class="mx-auto max-w-6xl px-4 py-8" data-project-id={project.id}>
     <nav class="mb-3 text-sm text-gray-500"><a href="/" class="hover:text-gray-900">Projects</a> <span class="text-gray-300">/</span> <span class="text-gray-700">{project.name}</span></nav>
 
     <div class="mb-6 flex flex-wrap items-end justify-between gap-3">
@@ -56,23 +68,61 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
       <a class="btn-primary" href={`/review/${project.id}`}>Open review</a>
     </div>
 
+    {isAdmin && (
+      <section class="card mb-6 p-5">
+        <h2 class="mb-4 text-sm font-semibold tracking-tight">Settings</h2>
+        <form id="project-form" class="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <label class="block text-sm">
+            <span class="mb-1.5 block font-medium text-gray-700">Name</span>
+            <input name="name" class="input" value={project.name} required maxlength="200" />
+          </label>
+          <label class="block text-sm">
+            <span class="mb-1.5 block font-medium text-gray-700">Website address</span>
+            <input name="baseUrl" class="input" type="url" value={project.baseUrl} required />
+          </label>
+          <div class="flex gap-2">
+            <button class="btn-primary" type="submit">Save</button>
+            <button class="btn-danger" type="button" id="delete-btn">Delete project</button>
+          </div>
+        </form>
+        <p id="project-msg" class="mt-2 min-h-5 text-sm"></p>
+      </section>
+    )}
+
     <section class="card mb-6 p-5">
-      <h2 class="mb-4 text-sm font-semibold tracking-tight">Settings</h2>
-      <form id="project-form" class="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-        <label class="block text-sm">
-          <span class="mb-1.5 block font-medium text-gray-700">Name</span>
-          <input name="name" class="input" value={project.name} required maxlength="200" />
-        </label>
-        <label class="block text-sm">
-          <span class="mb-1.5 block font-medium text-gray-700">Website address</span>
-          <input name="baseUrl" class="input" type="url" value={project.baseUrl} required />
-        </label>
-        <div class="flex gap-2">
-          <button class="btn-primary" type="submit">Save</button>
-          <button class="btn-danger" type="button" id="delete-btn">Delete project</button>
-        </div>
-      </form>
-      <p id="project-msg" class="mt-2 min-h-5 text-sm"></p>
+      <div class="mb-1 flex items-baseline justify-between gap-3">
+        <h2 class="text-sm font-semibold tracking-tight">Owners</h2>
+        <span class="text-xs text-gray-500">{isAdmin ? 'Owners can approve, reject and export this project’s comments – nothing else.' : 'People who can decide this project’s comments, besides admins.'}</span>
+      </div>
+      {isAdmin ? (
+        <>
+          <div id="owner-pills" class="mt-3 flex min-h-10 flex-wrap items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2 py-1.5 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/25">
+            {owners.map((o) => (
+              <span class="owner-pill inline-flex items-center gap-1 rounded-full bg-brand-soft py-0.5 pl-2.5 pr-1 text-xs font-medium text-brand-dark" data-id={o.id} title={`${o.email} · owner since ${fmt(o.addedAt)}`}>
+                {o.name ?? o.email}
+                <button type="button" class="remove-owner flex h-4 w-4 items-center justify-center rounded-full hover:bg-brand/20" aria-label={`Remove ${o.name ?? o.email}`}>×</button>
+              </span>
+            ))}
+            <input id="owner-input" class="min-w-40 flex-1 border-0 bg-transparent px-1 py-0.5 text-sm focus:outline-none" placeholder="Add a person…" autocomplete="off" list="owner-options" />
+            <datalist id="owner-options"></datalist>
+          </div>
+          <div class="mt-2 flex items-center justify-between gap-3">
+            <p class="text-xs text-gray-500">Only people who have signed in at least once appear here.</p>
+            <div class="flex items-center gap-3">
+              <span id="owners-msg" class="text-sm"></span>
+              <button id="save-owners" class="btn-secondary" type="button" disabled>Save owners</button>
+            </div>
+          </div>
+          <script type="application/json" id="directory-data" set:html={JSON.stringify(directory)} />
+        </>
+      ) : (
+        <ul class="mt-3 flex flex-wrap gap-1.5">
+          {owners.length === 0 && <li class="text-sm text-gray-500">No owners – only admins decide here.</li>}
+          {owners.map((o) => (
+            <li class="inline-flex items-center rounded-full bg-brand-soft px-2.5 py-0.5 text-xs font-medium text-brand-dark" title={o.email}>{o.name ?? o.email}{o.id === user.id ? ' (you)' : ''}</li>
+          ))}
+        </ul>
+      )}
     </section>
 
     <section class="mb-4 flex flex-wrap items-end justify-between gap-3">
@@ -98,7 +148,7 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
             {COMMENT_STATUSES.map((st) => <option value={st} selected={statusFilter === st}>{STATUS_LABEL[st]} ({count(st)})</option>)}
           </select>
         </label>
-        {(pathFilter || authorFilter || statusFilter) && <a href={`/admin/projects/${project.id}`} class="btn-ghost">Clear</a>}
+        {(pathFilter || authorFilter || statusFilter) && <a href={`/projects/${project.id}/manage`} class="btn-ghost">Clear</a>}
       </form>
       <div class="flex flex-wrap items-center gap-2 text-sm">
         <span class="text-gray-600">Export{pathFilter ? ' this page' : ''}</span>
@@ -172,14 +222,16 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
 </Layout>
 
 <script>
-  const projectId = Number(location.pathname.split('/').pop());
-  const msg = document.getElementById('project-msg')!;
-  const say = (text: string, ok: boolean) => {
-    msg.textContent = text;
-    msg.className = 'mt-2 min-h-5 text-sm ' + (ok ? 'text-green-700' : 'text-red-700');
+  const projectId = Number(document.querySelector<HTMLElement>('main[data-project-id]')!.dataset.projectId);
+  const flash = (el: HTMLElement | null, text: string, ok: boolean) => {
+    if (!el) return;
+    el.textContent = text;
+    el.className = el.className.replace(/text-(green|red)-700/g, '').trim() + (ok ? ' text-green-700' : ' text-red-700');
   };
 
-  document.getElementById('project-form')!.addEventListener('submit', async (e) => {
+  // ---- settings (admins only – the elements are absent for owners) ----
+  const projectMsg = document.getElementById('project-msg');
+  document.getElementById('project-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target as HTMLFormElement);
     const res = await fetch(`/api/projects/${projectId}`, {
@@ -188,16 +240,101 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
       body: JSON.stringify({ name: fd.get('name'), baseUrl: fd.get('baseUrl') }),
     });
     const data = await res.json().catch(() => ({}));
-    say(res.ok ? 'Saved.' : data.error ?? `Error ${res.status}`, res.ok);
+    flash(projectMsg, res.ok ? 'Saved.' : data.error ?? `Error ${res.status}`, res.ok);
   });
 
-  document.getElementById('delete-btn')!.addEventListener('click', async () => {
+  document.getElementById('delete-btn')?.addEventListener('click', async () => {
     if (!confirm('Delete this project and all its comments? This cannot be undone.')) return;
     const res = await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
     if (res.ok) location.href = '/';
-    else say(`Error ${res.status}`, false);
+    else flash(projectMsg, `Error ${res.status}`, false);
   });
 
+  // ---- owners (admins only) ----
+  const pills = document.getElementById('owner-pills');
+  if (pills) {
+    type Person = { id: number; name: string | null; email: string };
+    const directory: Person[] = JSON.parse(document.getElementById('directory-data')!.textContent ?? '[]');
+    const input = document.getElementById('owner-input') as HTMLInputElement;
+    const options = document.getElementById('owner-options') as HTMLDataListElement;
+    const save = document.getElementById('save-owners') as HTMLButtonElement;
+    const msg = document.getElementById('owners-msg');
+    const label = (p: Person) => (p.name ? `${p.name} <${p.email}>` : p.email);
+    const selected = new Set<number>([...pills.querySelectorAll<HTMLElement>('.owner-pill')].map((el) => Number(el.dataset.id)));
+    const saved = new Set(selected);
+
+    const dirty = () => selected.size !== saved.size || [...selected].some((id) => !saved.has(id));
+    const refresh = () => {
+      options.replaceChildren(
+        ...directory.filter((p) => !selected.has(p.id)).map((p) => Object.assign(document.createElement('option'), { value: label(p) })),
+      );
+      save.disabled = !dirty();
+      if (msg && dirty()) msg.textContent = '';
+    };
+
+    const addPill = (p: Person) => {
+      const pill = document.createElement('span');
+      pill.className = 'owner-pill inline-flex items-center gap-1 rounded-full bg-brand-soft py-0.5 pl-2.5 pr-1 text-xs font-medium text-brand-dark';
+      pill.dataset.id = String(p.id);
+      pill.title = p.email;
+      pill.append(p.name ?? p.email);
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'remove-owner flex h-4 w-4 items-center justify-center rounded-full hover:bg-brand/20';
+      x.setAttribute('aria-label', `Remove ${p.name ?? p.email}`);
+      x.textContent = '×';
+      pill.append(x);
+      input.before(pill);
+      selected.add(p.id);
+      refresh();
+    };
+
+    pills.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('.remove-owner');
+      if (!btn) return;
+      const pill = btn.closest<HTMLElement>('.owner-pill')!;
+      selected.delete(Number(pill.dataset.id));
+      pill.remove();
+      refresh();
+    });
+
+    const tryAdd = () => {
+      const v = input.value.trim().toLowerCase();
+      if (!v) return;
+      const hit = directory.find((p) => !selected.has(p.id) && (label(p).toLowerCase() === v || p.email.toLowerCase() === v));
+      if (!hit) return;
+      input.value = '';
+      addPill(hit);
+    };
+    input.addEventListener('change', tryAdd);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        tryAdd();
+      }
+    });
+
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      const res = await fetch(`/api/projects/${projectId}/owners`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ userIds: [...selected] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        saved.clear();
+        selected.forEach((id) => saved.add(id));
+        flash(msg, 'Owners saved.', true);
+      } else {
+        flash(msg, data.error ?? `Error ${res.status}`, false);
+      }
+      refresh();
+    });
+    refresh();
+  }
+
+  // ---- export ----
   const exportStatus = document.getElementById('export-status') as HTMLSelectElement;
   exportStatus.addEventListener('change', () => {
     document.querySelectorAll<HTMLAnchorElement>('.export-link').forEach((a) => {
@@ -207,12 +344,13 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
     });
   });
 
+  // ---- comments ----
   document.querySelectorAll<HTMLButtonElement>('.delete-comment').forEach((btn) =>
     btn.addEventListener('click', async () => {
       if (!confirm('Delete this comment?')) return;
       const res = await fetch(`/api/comments/${btn.dataset.id}`, { method: 'DELETE' });
       if (res.ok) btn.closest('tr')?.remove();
-      else say(`Error ${res.status}`, false);
+      else alert(`Error ${res.status}`);
     }),
   );
 </script>

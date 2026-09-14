@@ -1,4 +1,5 @@
 import { asc, eq, inArray } from 'drizzle-orm';
+import { canManageProject } from './access';
 import type { AuthUser } from './auth';
 import { db, schema } from './db';
 import { HttpError } from './http';
@@ -72,7 +73,7 @@ export function getReply(id: number, viewer: AuthUser): ReplyDto {
   return toDto(r, viewer);
 }
 
-/** Anyone who can see the project can reply – only closing a thread is restricted. */
+/** Anyone who can see the project can reply, in every comment status – only the verdict is restricted. */
 export function createReply(commentId: number, body: string, viewer: AuthUser): ReplyDto {
   const parent = db.select({ id: schema.comments.id }).from(schema.comments).where(eq(schema.comments.id, commentId)).get();
   if (!parent) throw new HttpError(404, 'Comment not found');
@@ -86,10 +87,17 @@ export function createReply(commentId: number, body: string, viewer: AuthUser): 
   return getReply(row.id, viewer);
 }
 
+/**
+ * A reply carries no status, so its author keeps edit and delete unconditionally; someone else's
+ * reply takes a project manager. The parent's project is looked up here rather than added to
+ * `selectShape`, which `repliesFor()` shares with every review-screen load and export.
+ */
 function assertCanModify(id: number, viewer: AuthUser): ReplyDto {
   const r = getReply(id, viewer);
-  if (!r.mine && viewer.role !== 'admin') throw new HttpError(403, 'You can only modify your own replies');
-  return r;
+  if (r.mine) return r;
+  const parent = db.select({ projectId: schema.comments.projectId }).from(schema.comments).where(eq(schema.comments.id, r.commentId)).get();
+  if (parent && canManageProject(parent.projectId, viewer)) return r;
+  throw new HttpError(403, 'You can only modify your own replies');
 }
 
 export function updateReply(id: number, body: string, viewer: AuthUser): ReplyDto {

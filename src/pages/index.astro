@@ -3,7 +3,7 @@ import Layout from '~/layouts/Layout.astro';
 import { listProjects } from '~/lib/projects';
 
 const user = Astro.locals.user;
-const projects = listProjects();
+const projects = listProjects(user);
 const isAdmin = user.role === 'admin';
 
 const ago = (s: string) => {
@@ -99,8 +99,8 @@ const ago = (s: string) => {
                       <path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" />
                     </svg>
                   </a>
-                  {isAdmin && (
-                    <a href={`/admin/projects/${p.id}`} class="btn-secondary">
+                  {p.canManage && (
+                    <a href={`/projects/${p.id}/manage`} class="btn-secondary">
                       Manage
                     </a>
                   )}

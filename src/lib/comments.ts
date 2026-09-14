@@ -1,5 +1,6 @@
 import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
+import { canManageProject, requireProjectManager } from './access';
 import type { AuthUser } from './auth';
 import { db, schema } from './db';
 import { HttpError } from './http';
@@ -212,15 +213,15 @@ function assertCanEdit(id: number, viewer: AuthUser): CommentDto {
 }
 
 /**
- * The author while the comment is still open, or a global admin in any state.
- * Phase 2 widens the manager side to project owners; the author rule stays.
+ * The author while the comment is still open, or a project manager (admin or owner) in any state.
+ * Owners may delete but not edit: removing spam is a different power from rewriting a reviewer's words.
  */
 function assertCanDelete(id: number, viewer: AuthUser): CommentDto {
   const c = getComment(id, viewer);
-  if (viewer.role === 'admin') return c;
+  if (c.mine && c.status === 'open') return c;
+  if (canManageProject(c.projectId, viewer)) return c;
   if (!c.mine) throw new HttpError(403, 'You can only delete your own comments');
-  if (c.status !== 'open') throw new HttpError(403, 'A decided comment can no longer be deleted');
-  return c;
+  throw new HttpError(403, 'A decided comment can no longer be deleted');
 }
 
 function sqlNow(): string {
@@ -236,15 +237,16 @@ export function updateComment(id: number, body: string, viewer: AuthUser): Comme
 }
 
 /**
- * Approve, reject or reopen. A manager action – deliberately NOT guarded by `assertCanEdit`: the
- * comment's own author has no say in its verdict, otherwise anyone could approve their own comment
- * straight into the approved-only export. Admin-only until project owners arrive (Phase 2).
- * Setting the status the comment already holds is a no-op, so `statusAt` records the decision and
- * not the last click.
+ * Approve, reject or reopen. A manager action (admin or project owner) – deliberately NOT guarded by
+ * `assertCanEdit`: the comment's own author has no say in its verdict, otherwise anyone could approve
+ * their own comment straight into the approved-only export. Takes the raw value so the permission
+ * check runs before validation – a reviewer learns 403, not what a valid status looks like. Setting
+ * the status the comment already holds is a no-op, so `statusAt` records the decision, not the last click.
  */
-export function setStatus(id: number, status: CommentStatus, viewer: AuthUser): CommentDto {
-  if (viewer.role !== 'admin') throw new HttpError(403, 'Only a project manager can decide a comment');
+export function setStatus(id: number, rawStatus: unknown, viewer: AuthUser): CommentDto {
   const c = getComment(id, viewer);
+  requireProjectManager(c.projectId, viewer);
+  const status = normalizeStatus(rawStatus);
   if (c.status === status) return c;
   db.update(schema.comments)
     .set(status === 'open' ? { status, statusAt: null, statusBy: null } : { status, statusAt: sqlNow(), statusBy: viewer.id })

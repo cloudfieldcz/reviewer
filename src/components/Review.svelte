@@ -1,16 +1,22 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { computeAnchor, isReviewerNode, pickMeaningful, resolveAnchor, type Anchor, type ResolveMethod } from '~/lib/client/anchor';
-  import { api, type CommentDto, type CommentStatus, type ReplyDto, type Viewport } from '~/lib/client/api';
+  import { api, type CommentDto, type CommentStatus, type ProjectAccess, type ReplyDto, type Viewport } from '~/lib/client/api';
   import { Overlay } from '~/lib/client/overlay';
 
   interface Props {
     project: { id: number; name: string; baseUrl: string };
-    user: { id: number; name: string; role: 'admin' | 'user' };
+    user: { id: number; name: string };
+    /**
+     * What the viewer may do on this project, computed on the server. A rendering hint only – the
+     * API decides for real; if ownership is revoked while the page is open the buttons stay until
+     * reload and the calls start failing into the error bar.
+     */
+    access: ProjectAccess;
     initialPath: string;
     initialDevice: Viewport;
   }
-  let { project, user, initialPath, initialDevice }: Props = $props();
+  let { project, user, access, initialPath, initialDevice }: Props = $props();
 
   const PREFIX = `/p/${project.id}`;
   const INTRO_KEY = 'reviewer.intro.v2';
@@ -46,8 +52,8 @@
   let statusFilter = $state<Record<CommentStatus, boolean>>({ open: true, approved: false, rejected: false });
   const STATUS_LABEL: Record<CommentStatus, string> = { open: 'Open', approved: 'Approved', rejected: 'Rejected' };
   const STATUS_MARK: Record<CommentStatus, string> = { open: '●', approved: '✓', rejected: '✕' };
-  /** Rendering hint only – the server decides in setStatus / delete. Becomes a prop with project owners. */
-  const canManage = $derived(user.role === 'admin');
+  /** Admin or owner of this project: verdicts, deleting others' comments and replies, export. */
+  const canManage = access !== 'reviewer';
   let error = $state<string | null>(null);
   let loading = $state(true);
   let frameError = $state(false);
@@ -911,7 +917,8 @@
         {#each visible as c (c.id)}
           {@const found = resolved[c.id] != null}
           {@const decided = c.status !== 'open'}
-          {@const canEdit = user.role === 'admin' || (c.mine && !decided)}
+          {@const canEdit = access === 'admin' || (c.mine && !decided)}
+          {@const canDelete = canManage || (c.mine && !decided)}
           {@const isActive = activeId === c.id}
           <article
             data-cid={c.id}
@@ -973,7 +980,7 @@
             {#if c.replies.length > 0}
               <ul class="mt-2.5 space-y-2 border-l-2 border-gray-200 pl-2.5">
                 {#each c.replies as r (r.id)}
-                  {@const canEditReply = r.mine || user.role === 'admin'}
+                  {@const canDeleteReply = r.mine || canManage}
                   <li class="group/reply">
                     <div class="flex items-baseline justify-between gap-2">
                       <span class="truncate text-xs font-medium text-gray-700" title={r.author.email}>{r.mine ? 'You' : (r.author.name ?? r.author.email)}</span>
@@ -987,9 +994,11 @@
                       </div>
                     {:else}
                       <p class="whitespace-pre-wrap text-[13px] leading-relaxed text-gray-700">{r.body}</p>
-                      {#if canEditReply}
+                      {#if canDeleteReply}
                         <div class="mt-0.5 flex gap-1 text-xs opacity-0 transition-opacity group-hover/reply:opacity-100 group-focus-within/reply:opacity-100">
-                          <button class="btn-ghost !px-1.5 !py-0 !text-[11px]" onclick={(e) => { e.stopPropagation(); startReplyEdit(c, r); }}>Edit</button>
+                          {#if r.mine}
+                            <button class="btn-ghost !px-1.5 !py-0 !text-[11px]" onclick={(e) => { e.stopPropagation(); startReplyEdit(c, r); }}>Edit</button>
+                          {/if}
                           <button class="btn-ghost !px-1.5 !py-0 !text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); removeReply(c, r); }}>Delete</button>
                         </div>
                       {/if}
@@ -1033,6 +1042,8 @@
                   {/if}
                   {#if canEdit}
                     <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startEdit(c); }}>Edit</button>
+                  {/if}
+                  {#if canDelete}
                     <button class="btn-ghost !px-2 !py-0.5 !text-xs text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); remove(c); }}>Delete</button>
                   {/if}
                 </div>
@@ -1042,8 +1053,8 @@
         {/each}
       </div>
 
-      {#if user.role === 'admin'}
-        <a class="flex items-center justify-between border-t border-gray-200 bg-white px-3 py-2.5 text-xs font-medium text-gray-600 transition-colors hover:text-gray-900" href={`/admin/projects/${project.id}`}>
+      {#if canManage}
+        <a class="flex items-center justify-between border-t border-gray-200 bg-white px-3 py-2.5 text-xs font-medium text-gray-600 transition-colors hover:text-gray-900" href={`/projects/${project.id}/manage`}>
           Manage project &amp; export
           <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5" /></svg>
         </a>

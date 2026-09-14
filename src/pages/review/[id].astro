@@ -1,6 +1,7 @@
 ---
 import Review from '~/components/Review.svelte';
 import Layout from '~/layouts/Layout.astro';
+import { projectAccess } from '~/lib/access';
 import { normalizePagePath, normalizeViewport } from '~/lib/comments';
 import { getProject } from '~/lib/projects';
 
@@ -23,13 +24,16 @@ try {
 // A comment link from the admin table carries the viewport it was written in.
 const initialDevice = normalizeViewport(Astro.url.searchParams.get('device'));
 const user = Astro.locals.user;
+// A rendering hint for the island: owners are `role: 'user'`, so the island must not look at the role.
+const access = projectAccess(project.id, user);
 ---
 
 <Layout title={`Review · ${project.name}`} fullscreen>
   <Review
     client:only="svelte"
     project={{ id: project.id, name: project.name, baseUrl: project.baseUrl }}
-    user={{ id: user.id, name: user.name, role: user.role }}
+    user={{ id: user.id, name: user.name }}
+    access={access}
     initialPath={initialPath}
     initialDevice={initialDevice}
   />

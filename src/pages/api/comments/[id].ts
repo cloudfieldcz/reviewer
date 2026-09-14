@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
-import { deleteComment, getComment, normalizeStatus, setStatus, updateComment } from '~/lib/comments';
-import { handler, HttpError, idParam, json, readJson, requireAdmin, str } from '~/lib/http';
+import { deleteComment, getComment, setStatus, updateComment } from '~/lib/comments';
+import { handler, HttpError, idParam, json, readJson, str } from '~/lib/http';
 
 export const GET: APIRoute = handler((ctx) => json(getComment(idParam(ctx.params.id), ctx.locals.user)));
 
@@ -17,11 +17,8 @@ export const PATCH: APIRoute = handler(async (ctx) => {
   const hasBody = 'body' in b;
   const hasStatus = 'status' in b;
   if (hasBody && hasStatus) throw new HttpError(400, 'Send either body or status, not both');
-  if (hasStatus) {
-    // Permission before value validation, so a reviewer learns 403 and not what a valid status is.
-    requireAdmin(ctx);
-    return json(setStatus(id, normalizeStatus(b.status), ctx.locals.user));
-  }
+  // setStatus checks the manager permission before it validates the value.
+  if (hasStatus) return json(setStatus(id, b.status, ctx.locals.user));
   return json(updateComment(id, str(b.body) ?? '', ctx.locals.user));
 });
 
