@@ -1,6 +1,6 @@
 # Reviewer
 
-A tool for reviewing websites. Pick a project (a website URL), see the site in a frame, click any element, write a comment – it stays anchored to that element like a tracked change in Word. Anyone can reply to a comment; the author or an admin marks it resolved once it is dealt with. Everyone sees all comments; users edit only their own; admins manage projects and export.
+A tool for reviewing websites. Pick a project (a website URL), see the site in a frame, click any element, write a comment – it stays anchored to that element like a tracked change in Word. Anyone can reply to a comment; a project manager – an admin, or an owner the admin picked for that project – approves or rejects it, and the export carries only the approved ones by default. Everyone sees all comments; users edit only their own while they are open.
 
 No widget on the target site: the page is served through Reviewer's own reverse proxy, so the frame is same-origin and the app can work with its DOM directly.
 
@@ -14,9 +14,10 @@ Documentation: [`docs/functional-spec.md`](./docs/functional-spec.md) – what t
 ## Features (MVP)
 
 - Sign-in via Microsoft Entra ID (oauth2-proxy), roles `admin` / `user` from Entra **app roles**
-- Admin: create / edit / delete projects (name + base URL, with reachability check), overview of all comments with filters, export to Markdown / CSV / JSON
-- User: pick a project, comment, see everybody's comments, edit / delete own, reply to anyone's
-- Replies and a resolved state: flat threads under each comment, resolve / reopen by the comment's author or an admin, resolved ones hidden from the review screen until asked for and flagged in the export
+- Admin: create / edit / delete projects (name + base URL, with reachability check), pick project owners, overview of all comments with filters, export to Markdown / CSV / JSON
+- Owner: a non-admin who manages one project's comments – approve / reject, overview, export – without touching its settings
+- User: pick a project, comment, see everybody's comments, edit / delete own while open, reply to anyone's
+- Replies and a status: flat threads under each comment; a project manager approves, rejects or reopens; decided comments are hidden from the review screen until asked for; the export selects by status and defaults to approved only
 - Review screen: site in an iframe, hover highlight, `+` button, comment anchored to the element, right-hand sidebar (all / mine), in-frame navigation with path bar, back / forward / reload
 - Comments survive redeploys: three anchors per comment (CSS selector → XPath → text snippet), "element not found" fallback – the text never disappears
 - Single Docker image, SQLite on a volume, migrations run at start
@@ -142,18 +143,23 @@ POST   /api/projects/probe                       admin   { url } → { ok, statu
 GET    /api/projects/:id
 PATCH  /api/projects/:id                         admin
 DELETE /api/projects/:id                         admin   (cascades to comments)
-GET    /api/projects/:id/export?format=csv|md|json[&path=/x][&download=0]   admin
+GET    /api/projects/:id/export?format=csv|md|json[&status=approved,rejected|all][&path=/x][&download=0]
+                                                 admin or owner; status defaults to approved, unknown values → 400
+GET    /api/projects/:id/owners                  admin or owner   [{ id, name, email, addedAt }]
+PUT    /api/projects/:id/owners                  admin   { userIds: number[] } – replaces the set (PUT on purpose: not forgeable by a cross-site form)
 
 GET    /api/comments?project=ID[&path=/x]        every comment of the page; items carry author {name,email}, mine,
-                                                 resolvedAt / resolvedBy and the full replies[] list
+                                                 status / statusAt / statusBy and the full replies[] list
 POST   /api/comments                             { project_id, page_path, viewport, body, selector, xpath, text_snippet, tag_name, rect_top }
 GET    /api/comments/:id
-PATCH  /api/comments/:id                         own only (admin: any)   { body } or { resolved: true|false }
-DELETE /api/comments/:id                         own only (admin: any)   (cascades to replies)
+PATCH  /api/comments/:id                         { body }    author while open (admin: any)
+                                                 { status: open|approved|rejected }   admin or project owner
+                                                 both keys at once → 400
+DELETE /api/comments/:id                         author while open, or admin / project owner   (cascades to replies)
 
-POST   /api/comments/:id/replies                 any signed-in user, resolved threads included   { body }
-PATCH  /api/replies/:id                          own only (admin: any)   { body }
-DELETE /api/replies/:id                          own only (admin: any)
+POST   /api/comments/:id/replies                 any signed-in user, in every comment status   { body }
+PATCH  /api/replies/:id                          own only   { body }
+DELETE /api/replies/:id                          own, or admin / project owner
 ```
 
 ## Project layout
@@ -163,13 +169,14 @@ src/
   middleware.ts            identity headers → locals.user (401/403)
   lib/auth.ts              role mapping (X-Forwarded-Groups, ADMIN_EMAILS, DEFAULT_ROLE, DEV_USER)
   lib/db/                  Drizzle schema + SQLite connection + migrations (drizzle/)
+  lib/access.ts            project access level (admin / owner / reviewer), owner CRUD
   lib/projects.ts, comments.ts, replies.ts, export.ts, url.ts (SSRF guard)
   lib/proxy/               fetch.ts (undici, limits) · rewrite.ts (cheerio) · inject.ts · handler.ts
   lib/client/              anchor.ts (finder/xpath/text) · overlay.ts (outline, +, markers) · api.ts
   components/Review.svelte the review screen island (toolbar, iframe wiring, sidebar)
-  pages/                   index (projects) · review/[id] · admin/projects/[id] · admin/users · p/[id]/[...path] · api/*
-tests/                     vitest: proxy rewriting, auth, URL validation, project counts,
-                           reply / resolve permissions, Markdown export
+  pages/                   index (projects) · review/[id] · projects/[id]/manage · admin/users · p/[id]/[...path] · api/*
+tests/                     vitest: proxy rewriting, auth, URL validation, project counts, access levels and owners,
+                           comment / reply / status permissions, the PATCH dispatch, export rendering and filter
 deploy/                    full compose stack (Traefik + oauth2-proxy + Redis) + env example
 ```
 

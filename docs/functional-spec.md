@@ -29,37 +29,50 @@ public HTTPS can be reviewed the moment an admin adds its URL.
 | **Comment** | A note by one person, anchored to one element on one page in one viewport. |
 | **Anchor** | The stored description of the element (CSS selector, XPath, text snippet) used to find it again on later visits. |
 | **Reply** | An answer under a comment. A flat thread, no nesting — replies carry no anchor of their own. |
-| **Resolved** | A comment marked as dealt with. It is kept, with who closed it and when, and stays out of the way until asked for. |
+| **Status** | The verdict on a comment: **open** (the working set), **approved** (do it) or **rejected** (we are not doing it). A decided comment is kept, with who decided it and when, and stays out of the way until asked for. |
+| **Owner** | A person who may decide a project's comments — approve, reject, export — without being an admin anywhere else. Owners are picked per project from people who have signed in at least once. |
 | **Comment mode** | Review screen state where clicks create comments instead of following links. |
 | **Browse mode** | The opposite: the site behaves normally, so the reviewer can navigate to the page they want to comment on. |
 
 ## Roles and permissions
 
-Two roles, `admin` and `user`. The role comes from Microsoft Entra ID app roles and is re-evaluated
-on every request — see [architecture.md](./architecture.md#authentication-and-roles).
+Two global roles, `admin` and `user`. The role comes from Microsoft Entra ID app roles and is
+re-evaluated on every request — see [architecture.md](./architecture.md#authentication-and-roles).
+On top of that, a project has **owners**: users an admin has picked for that one project. An owner
+is a `user` everywhere else; on their project they are a *manager*, like an admin is on every
+project.
 
-| Action | user | admin |
-|---|---|---|
-| List projects, open the review screen | ✅ | ✅ |
-| See every comment in a project, with its author | ✅ | ✅ |
-| Add a comment | ✅ | ✅ |
-| Reply to any comment, including someone else's | ✅ | ✅ |
-| Edit / delete **own** comment or reply | ✅ | ✅ |
-| Edit / delete someone else's comment or reply | ❌ | ✅ |
-| Resolve / reopen **own** comment | ✅ | ✅ |
-| Resolve / reopen someone else's comment | ❌ | ✅ |
-| Create / edit / delete a project | ❌ | ✅ |
-| Export comments | ❌ | ✅ |
-| See the user overview | ❌ | ✅ |
+| Action | user | owner (on their project) | admin |
+|---|---|---|---|
+| List projects, open the review screen | ✅ | ✅ | ✅ |
+| See every comment in a project, with its author | ✅ | ✅ | ✅ |
+| Add a comment, reply to any comment | ✅ | ✅ | ✅ |
+| Edit **own** comment while it is open | ✅ | ✅ | ✅ |
+| Edit **own** comment once decided | ❌ | ❌ | ✅ |
+| Edit someone else's comment | ❌ | ❌ | ✅ |
+| Delete **own** comment while it is open | ✅ | ✅ | ✅ |
+| Delete **own** comment once decided | ❌ | ✅ | ✅ |
+| Delete someone else's comment or reply | ❌ | ✅ | ✅ |
+| Edit / delete own reply | ✅ | ✅ | ✅ |
+| Approve / reject / reopen a comment | ❌ | ✅ | ✅ |
+| Comment overview and export | ❌ | ✅ | ✅ |
+| Create / edit / delete a project, manage its owners | ❌ | ❌ | ✅ |
+| See the user overview | ❌ | ❌ | ✅ |
 
-Two deliberate choices here:
+Deliberate choices here:
 
 - **Everyone sees everything.** Reviews are a team activity; hiding other people's comments would
-  produce duplicates. Visibility is shared, editing is not.
+  produce duplicates. Visibility is shared, rights are not — ownership narrows *who may decide*,
+  not *who may look*. An owner still sees every other project. This is not tenant isolation.
+- **The verdict belongs to a manager, never to the author.** A reviewer cannot approve their own
+  comment into the export. The cost is accepted: on a project with no owners, a reviewer needs an
+  admin even for their own item.
+- **Once decided, a comment is a record.** Its author can no longer edit or delete it; silently
+  rewriting an approved comment would change what was agreed.
+- **Owners delete, they do not edit.** Removing spam is a different power from rewriting a
+  reviewer's words.
 - **Permissions are enforced in the API layer**, not in the UI. Hidden buttons are a convenience;
-  every endpoint checks the role itself.
-
-There is no per-project assignment in the MVP — every signed-in user sees every project.
+  every endpoint checks the role and the ownership itself.
 
 ## User flows
 
@@ -71,17 +84,30 @@ There is no per-project assignment in the MVP — every signed-in user sees ever
    again*; the **?** button in the toolbar brings it back (unticking the box makes it return again).
 3. Hover an element; it gets an outline and a `+` button. Click it, type the comment, save.
 4. Switch to browse mode, navigate to another page, switch back and keep commenting.
-5. Own comments can be edited or deleted from the sidebar at any time.
+5. Own comments can be edited or deleted from the sidebar while they are still open. A rejected
+   comment turns up under *Mine* with the *Rejected* chip lit, usually with a reply saying why.
+
+### Owner
+
+1. The tile of an owned project shows **Manage**; the review screen shows *Approve* / *Reject* on
+   open comments and *Reopen* on decided ones.
+2. Approve what should be done, reject what should not — rejecting opens the reply box so the reason
+   lands in the thread.
+3. On the manage screen, filter the comment table and export, by default only what was approved.
+   The owner list is visible there but read-only; settings are not shown at all.
 
 ### Admin
 
 1. *New project*: name and base URL. **Check URL** fetches the address first and reports the status
    and page title, so a typo or an unreachable host is caught before the project exists.
-2. The project management screen lists every comment in the project — author, page, element, text,
-   time — filterable by page and by author. Each row links straight to that comment on the review
+2. Add owners on the manage screen: pills picked from the people who have signed in at least once.
+   There is no pre-registering an e-mail that has never logged in.
+3. The manage screen lists every comment in the project — author, page, element, text, status, time
+   — filterable by page, author and status. Each row links straight to that comment on the review
    screen.
-3. Export the whole project or a single page as Markdown, CSV or JSON.
-4. Admins review like everybody else; the extra rights are additive.
+4. Export the whole project or a single page as Markdown, CSV or JSON, choosing which statuses to
+   include; the default is approved only.
+5. Admins review and decide like an owner of every project; the extra rights are additive.
 
 Deleting a project deletes its comments with it. This is intentional: a project is the unit of work,
 and orphaned comments about a site nobody reviews any more are noise.
@@ -125,21 +151,25 @@ like the page does. Markers reposition on scroll, resize and DOM changes. Clicki
 highlights the sidebar entry and vice versa.
 
 **Sidebar.** Filter *All / Mine*, own comments visually distinct from other people's, edit and
-delete on own entries only, author and timestamp on each. Comments whose element cannot be found are
-listed with an **element not found** flag.
+delete on own open entries only, author and timestamp on each. Comments whose element cannot be
+found are listed with an **element not found** flag.
 
 **Replies.** Every comment takes replies from anyone who can see the project — the way a review
 round actually goes: one person writes a note, another answers it. Replies are a flat list under the
 comment, never a tree, and carry no anchor of their own; they belong to the comment, which is what
-points at the element. A reply can be edited or deleted by whoever wrote it (admins: by anyone).
+points at the element. A reply can be edited by whoever wrote it and deleted by its author or a
+project manager.
 
-**Resolving.** The author of a comment, or an admin, closes it once it is dealt with — and can
-reopen it. Nothing is deleted: the thread keeps its replies, and the card says who closed it and
-when. Resolved comments drop out of the sidebar and their markers off the page, so what is left is
-what still needs doing; the *All* and *Mine* counts mean *open*. A line above the list says how many
-resolved comments there are and shows them on one click, greyed out, their markers turned into a
-grey ✓. Replying to a resolved comment stays possible — closing a thread ends the work, not the
-conversation.
+**Status.** A review round ends in a verdict. A project manager — an owner of the project or an admin
+— **approves** a comment (do it) or **rejects** it (we are not doing it), and can **reopen** either.
+Changing a verdict goes through *open*: two deliberate clicks, not a slip. Nothing is deleted: the
+thread keeps its replies, and the card says who decided and when. Rejecting opens the reply box, so
+the reason lands in the thread — there is no separate reason field. Decided comments drop out of the
+sidebar and their markers off the page, so what is left is what still needs doing. Three chips above
+the list — *● Open*, *✓ Approved*, *✕ Rejected*, each with its count — choose what is shown; only
+*Open* is lit by default, and the *All* / *Mine* counts follow the chips. Approved comments show a
+green ✓, rejected ones a red ✕, both muted. Replying to a decided comment stays possible — the
+verdict ends the work, not the conversation.
 
 **Navigation.** Links inside the frame stay inside the proxy. The toolbar shows the current path,
 offers back / forward / reload, and takes a typed path. The path is mirrored into the Reviewer URL
@@ -178,23 +208,30 @@ is worse than showing it without a highlight.
 
 ## Export
 
-Admin only, whole project or one page.
+Project managers (owners and admins), whole project or one page. **The export selects by status and
+defaults to approved only** — what gets pasted into an issue tracker is the agreed work, not the
+whole discussion including everything that was turned down. The manage screen has its own status
+select next to the export buttons, independent of the table filter, showing the count that will
+actually be exported; `status=all` or a comma list (`approved,rejected`) widens it. An unknown value
+is refused rather than silently exporting everything.
 
 | Format | Shape | Use |
 |---|---|---|
-| **Markdown** | Grouped by page, one bullet per comment with author, time, element and body, replies nested under it, resolved ones flagged | Paste into an issue or a work order — the main format |
-| **CSV** | `id, created_at, author_name, author_email, page_path, viewport, tag_name, text_snippet, selector, body, resolved_at, resolved_by, replies, replies_text` | Spreadsheets, filtering, sign-off tracking |
-| **JSON** | Raw dump | Importing into another tool |
+| **Markdown** | Header names the filter and what it excluded (`Comments: 12 approved (filter: approved – 40 open and 3 rejected not included)`), then grouped by page, one bullet per comment with author, time, element, body and the verdict with who and when, replies nested under it | Paste into an issue or a work order — the main format |
+| **CSV** | `id, created_at, author_name, author_email, page_path, viewport, tag_name, text_snippet, selector, body, status, status_at, status_by, replies, replies_text` | Spreadsheets, filtering, sign-off tracking |
+| **JSON** | Raw dump plus the applied filter and per-status totals | Importing into another tool |
 
 ## Scope
 
 **In the MVP**
 
-- Entra ID sign-in, `admin` / `user` roles
-- Admin: project CRUD with a reachability check, comment overview with filters, export
-- User: pick a project, comment, see everyone's comments, edit and delete own, reply to any comment
-- Resolving: the comment author or an admin closes a thread and can reopen it; resolved comments are
-  hidden from the review screen by default and flagged in the export
+- Entra ID sign-in, `admin` / `user` roles, plus per-project owners picked by admins
+- Admin: project CRUD with a reachability check, owner list, comment overview with filters, export
+- Owner: the comment overview, verdicts and export of their project — no settings
+- User: pick a project, comment, see everyone's comments, edit and delete own while open, reply to
+  any comment
+- Status: a project manager approves or rejects a comment and can reopen it; decided comments are
+  hidden from the review screen by default; the export selects by status, approved only by default
 - Review screen: hover highlight, `+`, anchored comments, numbered markers, sidebar, in-frame
   navigation with a path bar
 - Comments survive redeploys of the reviewed site
@@ -203,7 +240,8 @@ Admin only, whole project or one page.
 **Deliberately not in the MVP**
 
 Nested (threaded) replies · notifications · screenshots · a mobile layout · Jira or GitHub
-integration · sites behind a login · assigning projects to specific users.
+integration · sites behind a login · an audit trail of status changes · a rejection-reason field
+(the reply is the reason) · owners managing the owner list · hiding projects from non-owners.
 
 Sites with heavy client-side routing and sites requiring a login are outside what the proxy approach
 covers; see the limitations in [architecture.md](./architecture.md#known-limitations).
@@ -212,10 +250,11 @@ covers; see the limitations in [architecture.md](./architecture.md#known-limitat
 
 Roughly in the order they would pay off:
 
-1. Per-project user assignment, once more than one client's site is in the same instance.
-2. A screenshot of the element taken when the comment is written (`html2canvas` works, the frame is
+1. A screenshot of the element taken when the comment is written (`html2canvas` works, the frame is
    same-origin) — this makes a comment readable even after its element is gone.
-3. Notifications when someone replies to your comment or resolves it.
-4. Creating issues from the export (webhook or GitHub API) instead of pasting Markdown.
-5. A Playwright snapshot mode for sites where the proxy cannot render the page.
-6. Comparing comments between versions of a site — the stored anchors already allow it.
+2. Notifications when someone replies to your comment or decides it — today a rejected comment is
+   only discovered under *Mine* with the *Rejected* chip lit.
+3. Creating issues from the export (webhook or GitHub API) instead of pasting Markdown.
+4. A Playwright snapshot mode for sites where the proxy cannot render the page.
+5. Comparing comments between versions of a site — the stored anchors already allow it.
+6. Per-project visibility, if one instance ever hosts sites that different clients must not see.

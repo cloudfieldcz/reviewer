@@ -19,9 +19,10 @@ oauth2-proxy  (Entra ID OIDC, session in Redis, injects X-Forwarded-User / -Emai
 reviewer (Node 22, Astro 5 SSR)
   ├── /                     project list
   ├── /review/{id}          review screen (iframe + sidebar)
-  ├── /admin/*              project management, comment overview, export
+  ├── /projects/{id}/manage project management (admins), comment overview and export (managers)
+  ├── /admin/users          user overview – /admin/* means "global admin only"
   ├── /p/{id}/*             reverse proxy of the reviewed site
-  └── /api/*                comments, projects, export
+  └── /api/*                comments, projects, owners, export
   │
   ▼
 SQLite  (/data/reviewer.db on a Docker volume)
@@ -75,17 +76,22 @@ src/
   lib/auth.ts            role resolution, user upsert, DEV_USER fake identity
   lib/env.ts             env() / envFlag() – the only correct way to read configuration
   lib/http.ts            json / HttpError / handler() / requireAdmin / readJson / idParam / str
-  lib/db/                schema.ts (users, projects, comments, replies) · index.ts (connection, migrations)
-  lib/projects.ts        project CRUD, probeUrl()
-  lib/comments.ts        comment CRUD, resolve/reopen, ownership checks, DTO mapping
+  lib/access.ts          project access level (admin / owner / reviewer), requireProjectManager, owner CRUD
+  lib/db/                schema.ts (users, projects, project_owners, comments, replies) · index.ts (connection, migrations)
+  lib/projects.ts        project CRUD, probeUrl(), canManage per tile
+  lib/comments.ts        comment CRUD, status (approve / reject / reopen), edit and delete rules, DTO mapping
   lib/replies.ts         reply CRUD – no import of comments.ts, the dependency runs one way
   lib/export.ts          Markdown / CSV / JSON rendering
   lib/url.ts             base-URL normalization, SSRF guard
   lib/proxy/             fetch.ts (limits) · rewrite.ts (cheerio) · inject.ts · handler.ts
   lib/client/            anchor.ts (selector/xpath/text) · overlay.ts (outline, +, markers) · api.ts
   components/Review.svelte   the review screen
-  pages/                 index · review/[id] · admin/* · p/[id]/[...path] · api/*
+  pages/                 index · review/[id] · projects/[id]/manage · admin/users · p/[id]/[...path] · api/*
 ```
+
+`access.ts` imports nothing from `projects.ts`: `projects.ts` imports it for `canManage` on the
+tiles, and `comments.ts` imports `projects.ts`, so the reverse edge would close a cycle. That is why
+`requireProjectManager()` takes a raw project id and never 404s — routes call `getProject()` first.
 
 Business logic lives in `lib/`; API routes stay thin and wrap handlers in `handler()`, which turns a
 thrown `HttpError` into a JSON error response.
@@ -97,6 +103,8 @@ the top bars are near-black (`--color-ink`), the neutrals are a graphite scale w
 and the accent is violet `#6e56cf` — a colour few client sites use, so the annotation layer never
 blends into the page it sits on. The same three colours carry meaning everywhere, in the sidebar and
 on the in-page overlay alike: violet = yours, grey = somebody else's, amber = the comment in focus.
+Two more carry the verdict and nothing else: a muted green ✓ for approved, a muted red ✕ for
+rejected — on the sidebar card, its chip and the marker in the page.
 
 Tokens live in the `@theme` block of `src/styles/global.css`, including the overridden `gray-*`
 scale, so the whole app shifts from one place. The overlay drawn inside the proxied page repeats the
@@ -133,6 +141,59 @@ Rules that must not be broken:
 
 The user row is upserted on sign-in, with the write throttled to once a minute per user to keep it
 off the hot path.
+
+### Project access level
+
+The global role is the only thing Entra knows about. Who may *decide* a project's comments is a
+second, per-project fact: `project_owners` rows, managed by admins in the app. `lib/access.ts`
+derives one level per request:
+
+```
+        oauth2-proxy headers
+                │
+        resolveRole()  ──▶  role: 'admin' | 'user'      (per request, never from the DB cache)
+                │
+                ├── role === 'admin'          ──▶  access = 'admin'      (every project, everything)
+                │
+                └── role === 'user'
+                        │
+                        └── project_owners has (projectId, user.id)?
+                                 yes  ──▶  access = 'owner'      (this project's comments)
+                                 no   ──▶  access = 'reviewer'   (comment, reply, own while open)
+```
+
+`'admin'` and `'owner'` are both *managers*: they approve, reject and reopen, delete anyone's
+comment or reply on the project, see the manage page and export. Everything that creates or changes
+a project — name, base URL, deletion, the owner list, probing a URL — and the user overview stay
+behind `requireAdmin`.
+
+Four properties this must keep, each with a test:
+
+- **Ownership is additive, never a substitute for authentication.** A user without an Entra role is
+  rejected by the middleware before ownership is ever consulted. Owning a project cannot let anybody
+  into the app.
+- **`users.role` stays a cache.** `project_owners` stores a membership fact keyed by `users.id`,
+  not a copy of a role; the global role still comes from the headers on every request. The one
+  exception was the one-time data migration in `drizzle/0003_*`, which had no other signal and is
+  not a precedent.
+- **Owners cannot widen their own reach.** `setOwners()` asserts the admin role itself, and
+  `managedProjects()` returns `'all'` for admins or an explicit `Set` — never an empty set meaning
+  "everything", which any `size === 0 ? all : filter` caller would turn into a silent grant.
+- **Owners can never reach the SSRF guard.** `assertPublicHost()` runs only from project creation,
+  update and probing, all admin-only. An owner cannot change `base_url`, so cannot aim the proxy
+  anywhere — and since the proxy serves target HTML same-origin, that boundary is load-bearing.
+
+Ownership is keyed on `users.id`, which is keyed on the Entra `oid`. A re-provisioned account gets a
+new row and inherits nothing; that is correct fail-closed behaviour, so the upsert must not be
+"fixed" to key on e-mail. The review island receives the access level as a prop and never looks at
+the role — owners are `role: 'user'`. It is a rendering hint: if ownership is revoked while the page
+is open, the buttons stay until reload and the API answers 403 into the error bar.
+
+The manage page lives at `/projects/{id}/manage`, not under `/admin/`, because owners reach it and
+`/admin/*` must keep meaning "global admin only" — the danger of a blanket `/admin/*` guard is not
+that it locks owners out but that someone then weakens it to let them in, exposing `/admin/users`.
+The user directory behind the owner pills is fetched only in the admin branch of that page; an
+owner's HTML never contains it.
 
 ## The reverse proxy
 
@@ -232,18 +293,27 @@ comments  id, project_id → projects (cascade), user_id → users (cascade),
           viewport,          -- 'desktop' | 'phone' – the simulated screen it was written on
           body,
           selector, xpath, text_snippet, tag_name, rect_top,   -- anchors
-          resolved_at,       -- null while the thread is open
-          resolved_by → users (set null),
+          status,            -- 'open' | 'approved' | 'rejected', default 'open'
+          status_at,         -- null while open
+          status_by → users (set null),                         -- the verdict outlives its author
           created_at, updated_at
 
 comment_replies
           id, comment_id → comments (cascade), user_id → users (cascade),
           body, created_at, updated_at
+
+project_owners
+          project_id → projects (cascade), user_id → users (cascade),
+          added_at, added_by → users (set null),                -- who granted it
+          primary key (project_id, user_id)
 ```
 
-Indexes: `comments(project_id, page_path)` — the query behind every page load — `comments(user_id)`
-and `comment_replies(comment_id)`. Foreign keys are enforced (`PRAGMA foreign_keys = ON`); deleting
-a project takes its comments with it, and a comment takes its replies.
+Indexes: `comments(project_id, page_path)` — the query behind every page load — `comments(user_id)`,
+`comment_replies(comment_id)` and `project_owners(user_id)` for the reverse lookup ("which projects
+may this person manage") and the cascade from `users`. There is deliberately **no index on
+`comments.status`**: three values, always filtered inside one project whose prefix the path index
+already supplies. Foreign keys are enforced (`PRAGMA foreign_keys = ON`); deleting a project takes
+its comments and owner rows with it, a comment takes its replies, a user takes their ownerships.
 
 **Replies are their own table, not a `parent_id` on `comments`.** Anchoring, viewport, marker
 numbering and the comment counts on the project tiles all query `comments`; a self-join would mean
@@ -252,13 +322,36 @@ quiet bug. A reply carries no anchor, no viewport and no position — the commen
 there is nothing for the two to share but a foreign key. Replies for a whole page are fetched in one
 `where comment_id in (…)` and grouped in memory, never one query per comment.
 
-**Resolving is a state on the comment, not a deletion.** `resolved_at` plus `resolved_by` records
-when and by whom, which is what a review round needs to be able to show later; reopening clears
-both. The permission is the same one that guards editing — the comment's author, or an admin — so
-`PATCH /api/comments/:id` carries it (`{ resolved }`) instead of a route of its own.
+**Status is a verdict on the comment, not a deletion.** `status_at` plus `status_by` record when and
+by whom; reopening clears both, so an open comment has no decider. The column is plain `TEXT` —
+SQLite has no enum — and `normalizeStatus()` is the gate: it *throws* on anything but the three
+values, unlike `normalizeViewport()`, which coerces. A viewport is a display attribute where a wrong
+value is harmless; a status is a decision record, and coercing `"aproved"` to `open` would silently
+reopen a decided comment while answering `200`. Setting the status a comment already holds is a
+no-op, so `status_at` records the decision and not the last click.
+
+`PATCH /api/comments/:id` carries both the text edit and the verdict, and dispatches on the
+**presence** of the `status` key before any value is inspected: `{ body, status }` is a `400`, and
+`{ status: "aproved", body: "x" }` reaches the manager check and fails there, never the weaker
+author-only branch. `setStatus()` checks the permission before it validates the value for the same
+reason — a reviewer gets `403`, not a hint at what a valid status looks like.
+
+**The export filter fails narrow.** `?status=` absent or empty means `approved`, never everything; an
+unknown token is a `400`. A parser that degraded to "no filter" would hand rejected and open items
+over as agreed work.
 
 Migrations are generated with `drizzle-kit` into `drizzle/` and applied automatically at startup,
 so a fresh volume becomes a working database with no manual step.
+
+**Dropping a column on `comments` is a trap.** For a column drop on SQLite, drizzle-kit emits a full
+table rebuild — `CREATE TABLE __new_comments … INSERT … SELECT … DROP TABLE comments … RENAME` —
+wrapped in `PRAGMA foreign_keys=OFF/ON`. The migrator runs each migration inside a transaction, where
+that pragma is a **no-op**, so with foreign keys on `DROP TABLE comments` fires
+`comment_replies.comment_id ON DELETE CASCADE` and every reply in the database is gone (reproduced:
+2 replies → 0). Migration `0003` therefore has a hand-written body of plain `ALTER TABLE … ADD /
+DROP COLUMN` statements, verified on a copy of production data with the reply count unchanged. Any
+future migration that drops or retypes a column on `comments` will regenerate the same rebuild and
+must be hand-edited the same way, every statement separated by `--> statement-breakpoint`.
 
 ## Known limitations
 
@@ -279,10 +372,13 @@ Vitest covers the pure logic where a silent regression would be expensive: HTML 
 proxy-path mapping (`tests/rewrite.test.ts`), role resolution and URL validation / SSRF checks
 (`tests/auth.test.ts`), and Markdown export rendering (`tests/export.test.ts`).
 
-Two suites run against a real SQLite database opened at `:memory:` (set `DATABASE_PATH` before
+Four suites run against a real SQLite database opened at `:memory:` (set `DATABASE_PATH` before
 importing `lib/db`), because the bugs they guard against are invisible to the type checker: the
-project comment counts (`tests/projects.test.ts`) and the permission rules around replying and
-resolving, plus the reply-to-comment grouping (`tests/comments.test.ts`).
+project comment counts, including a project that has both comments and owners
+(`tests/projects.test.ts`); the permission rules around replying, editing, deleting and deciding for
+authors, owners and admins, plus the reply-to-comment grouping (`tests/comments.test.ts`); the
+access level, `managedProjects` and `setOwners` (`tests/access.test.ts`); and the `PATCH` route's
+key-presence dispatch, driven through the real handler (`tests/comment-patch.test.ts`).
 
 The DOM-dependent parts — anchoring and the overlay — are verified by driving a real browser against
 the running app.

@@ -41,14 +41,15 @@ src/
   lib/auth.ts            resolveRole(), upsertUser(), DEV_USER fake identity
   lib/http.ts            json/HttpError/handler()/requireAdmin/readJson/idParam/str helpers
   lib/env.ts             env() / envFlag() – the only correct way to read configuration
-  lib/db/                schema.ts (users, projects, comments, replies) + index.ts (connection, migrations)
-  lib/projects.ts        CRUD + probeUrl()          lib/comments.ts  CRUD + resolve + DTO mapping
+  lib/access.ts          projectAccess() admin|owner|reviewer, requireProjectManager(), owner CRUD – imports nothing from projects.ts
+  lib/db/                schema.ts (users, projects, project_owners, comments, replies) + index.ts (connection, migrations)
+  lib/projects.ts        CRUD + probeUrl() + canManage   lib/comments.ts  CRUD + status + edit/delete rules + DTO mapping
   lib/replies.ts         reply CRUD (must not import comments.ts – comments.ts imports it)
   lib/export.ts          md / csv / json export     lib/url.ts       base-URL normalization + SSRF guard
   lib/proxy/             fetch.ts (undici, limits) · rewrite.ts (cheerio) · inject.ts · handler.ts
   lib/client/            anchor.ts (finder/xpath/text) · overlay.ts (outline, +, markers) · api.ts
   components/Review.svelte   the review screen island
-  pages/                 index · review/[id] · admin/projects/[id] · admin/users · p/[id]/[...path] · api/*
+  pages/                 index · review/[id] · projects/[id]/manage · admin/users · p/[id]/[...path] · api/*
 ```
 
 ### Auth
@@ -60,6 +61,16 @@ never authorize against it. `DEV_USER` fakes these headers locally and is hard-d
 
 `ctx.locals.user` is set by the middleware and typed as non-optional, so API routes can use it
 directly; anything added to `PUBLIC_PATHS` must not touch it.
+
+On top of the global role, a project has **owners** (`project_owners`, managed by admins). `lib/access.ts`
+derives `admin | owner | reviewer` per request: header role first, then one PK lookup. Admins and
+owners are *project managers*: they decide comments, delete anyone's comment or reply on that project,
+see the manage page and export. Everything that changes a project (settings, delete, the owner list,
+probing) and `/admin/users` stay on `requireAdmin` – owners must never reach `assertPublicHost()`.
+`managedProjects()` returns `'all' | Set<number>`; never treat an empty Set as "everything". The manage
+page lives at `/projects/[id]/manage`, not under `/admin/`, so `/admin/*` keeps meaning global admin
+only; its user directory is fetched only in the admin branch. The review island gets `access` as a
+prop and must not look at `role` – owners are `role: 'user'`.
 
 ### Proxy
 `GET /p/{id}/{path}` only – every other method returns 405. The handler strips framing/CSP/cookie
@@ -91,18 +102,25 @@ A positional XPath alone is never trusted, and text match outranks a stale selec
 these without a test. No match → the comment stays in the sidebar flagged "element not found";
 comment text must never disappear.
 
-### Replies and resolving
+### Replies and status
 Replies live in `comment_replies`, **not** as `parent_id` on `comments` – every query behind
 anchoring, marker numbering and the project comment counts selects from `comments` and must not have
 to filter reply rows out. A reply has no anchor and no viewport; it belongs to the comment. Replies
 for a page are loaded in one `inArray` query and grouped in memory – never one query per comment.
 
-Anyone may reply, including on a resolved thread. Resolving is `resolved_at` + `resolved_by` on the
-comment and goes through `PATCH /api/comments/:id { resolved }`, guarded by the same
-`assertCanModify()` rule as editing: the comment's author or an admin. Reopening clears both
-columns; nothing is ever deleted. The review screen hides resolved comments and their markers by
-default, and the sidebar's *All* / *Mine* counts mean *open* – but a resolved comment is never
-dropped from the list silently, there is always a labelled toggle that brings it back.
+A comment carries `status` (`open | approved | rejected`) plus `status_at` / `status_by`. The verdict
+is a **manager** action (`setStatus()` → `requireProjectManager`), never the author's – reusing the
+author-or-admin rule would let anyone approve their own comment into the export. Authors edit and
+delete their own comment only while it is `open`; admins edit anything; owners delete but do not
+edit. `normalizeStatus()` **throws** on bad input (unlike `normalizeViewport`, which coerces).
+`PATCH /api/comments/:id` dispatches on the *presence* of the `status` key before validating it;
+`{ body, status }` is a 400. Reopening clears `status_at` / `status_by`; nothing is ever deleted.
+
+The review screen shows only `open` comments by default; the Open / Approved / Rejected chips bring
+the others back and the *All* / *Mine* counts follow the chips. Anyone may reply in every status.
+The export takes `?status=`, defaults to `approved` and rejects unknown values – never widen a bad
+filter to "everything". **`resolved` in `Review.svelte` and `anchor.ts` is anchor resolution**, not
+comment status; do not rename it.
 
 Comments also carry the viewport they were written in (`comments.viewport`, `'desktop' | 'phone'`),
 because the phone DOM is a different DOM. The review screen anchors and lists **only** the current
@@ -118,8 +136,16 @@ viewport's comments; the others are announced in the sidebar with a one-click sw
   marked `data-reviewer-ui` and skipped by `isReviewerNode()`.
 - Schema changes: edit `src/lib/db/schema.ts`, then `npm run db:generate` and commit the generated
   file in `drizzle/`. Migrations run automatically at startup from `lib/db/index.ts`.
-- Tests cover pure logic (role mapping, URL validation, HTML rewriting). Add cases there when
-  touching `lib/auth.ts`, `lib/url.ts` or `lib/proxy/rewrite.ts`.
+  **A generated migration that drops or retypes a column on `comments` rebuilds the table
+  (`DROP TABLE comments`) and, because `PRAGMA foreign_keys=OFF` is a no-op inside the migrator's
+  transaction, cascades away every row of `comment_replies`.** Replace the generated body by hand
+  with `ALTER TABLE … ADD / DROP COLUMN` statements (see `drizzle/0003_*.sql`), keep the generated
+  snapshot, separate statements with `--> statement-breakpoint`, and verify the reply count on a copy
+  of the real database. drizzle-kit prompts on such changes – answer create/drop, not rename.
+- Tests cover pure logic (role mapping, URL validation, HTML rewriting) and, against an in-memory
+  SQLite, the permission rules (`tests/comments.test.ts`, `tests/access.test.ts`,
+  `tests/comment-patch.test.ts`). Add cases there when touching `lib/auth.ts`, `lib/url.ts`,
+  `lib/proxy/rewrite.ts`, `lib/access.ts` or any guard in `lib/comments.ts` / `lib/replies.ts`.
 
 ## Gotchas
 
