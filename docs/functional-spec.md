@@ -243,6 +243,10 @@ Nested (threaded) replies · notifications · screenshots · a mobile layout · 
 integration · sites behind a login · an audit trail of status changes · a rejection-reason field
 (the reply is the reason) · owners managing the owner list · hiding projects from non-owners.
 
+Reviewer is a desktop tool. Under 900 px of window width every screen is replaced by a short notice
+with the current URL to copy, rather than a layout that pretends to work; the *iPhone 15* viewport
+on the review screen is how a phone layout gets reviewed, from a desktop.
+
 Sites with heavy client-side routing and sites requiring a login are outside what the proxy approach
 covers; see the limitations in [architecture.md](./architecture.md#known-limitations).
 

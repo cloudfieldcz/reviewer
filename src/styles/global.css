@@ -108,3 +108,22 @@ body {
 @utility chrome-seg-item {
   @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:text-white;
 }
+
+/* ---- small-screen gate ------------------------------------------------------
+ * Reviewer puts a full website next to a comment sidebar and anchors comments to the
+ * element under the cursor – neither survives a phone. Below the breakpoint the whole
+ * app chrome is swapped for a single notice instead of being squeezed into something
+ * that looks broken. Pure CSS on purpose: no flash, and it follows a rotation live.
+ * The proxied target site (`/p/{id}/*`) does not use this layout and stays untouched,
+ * so the phone viewport inside the review iframe still renders at its real width. */
+#small-screen {
+  display: none;
+}
+@media (max-width: 899px) {
+  body > *:not(#small-screen) {
+    display: none !important;
+  }
+  #small-screen {
+    display: flex;
+  }
+}

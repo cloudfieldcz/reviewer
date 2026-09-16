@@ -114,6 +114,16 @@ Type is IBM Plex Sans with IBM Plex Mono for machine strings (paths, tag names, 
 loaded from Google Fonts with a system fallback stack — a browser that cannot reach the CDN gets
 system sans, and nothing else changes.
 
+**Below 900 px the app is replaced by a notice.** The review screen needs the reviewed site and the
+comment sidebar side by side and a comment is made by pointing at an element; neither survives a
+phone, and squeezing the layout would only produce something that looks broken. `Layout.astro`
+therefore renders a `#small-screen` panel — the mark, one sentence and the current URL to copy — and
+`styles/global.css` hides every other direct child of `<body>` under the media query. It is pure CSS
+on purpose: no flash before hydration and it follows a rotation live. The island behind it still
+hydrates; that costs one wasted iframe load on a device nobody is working on, which is cheaper than
+the resize edge cases a JS gate would bring. The proxied target site (`/p/{id}/*`) does not use this
+layout, so the phone viewport inside the review iframe is untouched.
+
 ## Authentication and roles
 
 Roles are **not managed in the application**. They are Entra ID app roles (`ADMIN`, `USER`) on the

@@ -87,5 +87,26 @@ const path = Astro.url.pathname;
       )
     }
     <slot />
+    <!--
+      Below ~900 px the app is not usable: the review screen needs the target site and the
+      comment sidebar side by side, and anchoring a comment means pointing at an element.
+      Rather than let that collapse into something broken, everything else is hidden and this
+      notice takes over – see `#small-screen` in `styles/global.css`.
+    -->
+    <div id="small-screen" class="chrome fixed inset-0 z-50 flex-col items-center justify-center overflow-y-auto px-6 py-10 text-center">
+      <svg viewBox="0 0 24 24" class="h-10 w-10 text-white" aria-hidden="true">
+        <rect x="2.6" y="3.6" width="14.8" height="14.8" rx="3.2" fill="none" stroke="currentColor" stroke-width="1.7" opacity="0.65" />
+        <circle cx="17.6" cy="17.6" r="4.6" fill="var(--color-brand)" />
+      </svg>
+      <h1 class="mt-6 text-xl font-semibold tracking-tight text-white">Reviewer needs a bigger screen</h1>
+      <p class="mt-3 max-w-sm text-sm leading-relaxed text-gray-400">
+        Reviewing means walking through a website with the comments next to it and pointing at the
+        element you mean. That does not fit on a phone – open this page on a desktop or laptop.
+      </p>
+      <p class="mt-6 text-[11px] font-medium tracking-widest text-gray-500 uppercase">This page</p>
+      <code class="mt-2 max-w-full overflow-hidden rounded-md border border-white/10 bg-white/5 px-3 py-2 font-mono text-xs break-all text-gray-300">
+        {Astro.url.href}
+      </code>
+    </div>
   </body>
 </html>
