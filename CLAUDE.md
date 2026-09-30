@@ -88,6 +88,8 @@ Rules to preserve:
 - Limits are `PROXY_TIMEOUT_MS` 10 s and `PROXY_MAX_BYTES` 10 MB, no cookies forwarded either way.
 - Links must be rewritten **absolute** (via `PUBLIC_ORIGIN`), because `<base>` points at the target
   site – a relative rewrite would resolve against the target, not against Reviewer.
+- `#fragment` hrefs stay untouched in the HTML (site scripts read them); `inject.ts` turns an
+  unhandled click on one into `location.hash`, otherwise `<base>` sends the frame to the target.
 
 ### Anchoring
 `computeAnchor()` stores a `@medv/finder` CSS selector, a positional XPath, the first 80 chars of

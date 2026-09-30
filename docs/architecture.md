@@ -238,7 +238,10 @@ the reviewed site and Reviewer.
 else through the same-origin DOM. It patches `history.pushState` / `replaceState` so a client-side
 router keeps the `/p/{id}` prefix, catches clicks on links created after load, sends `GET` forms
 through the proxy and `POST` forms to the original site in a new tab, and reports route changes to
-the parent with `postMessage({type: 'reviewer:navigate'})`.
+the parent with `postMessage({type: 'reviewer:navigate'})`. In-page `#fragment` links would resolve
+against `<base>` and leave the proxy for the target site (which then usually refuses framing), so the
+script turns an unhandled click on one into `location.hash = …`. It listens in the bubble phase on
+`window`, so the site's own smooth-scroll handlers run first and still see the raw `href`.
 
 **Security.** There is no `?url=` open proxy — only paths under a registered project's base URL are
 reachable. Base URLs are validated when the project is created: `https://` only, no credentials, no

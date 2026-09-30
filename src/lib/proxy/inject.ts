@@ -68,6 +68,18 @@ document.addEventListener('click',function(ev){
   }
 },true);
 
+// '#frag' would resolve against <base> (the target site) and leave the proxy. Bubble phase on window,
+// so the site's own smooth-scroll handlers run first and still see the raw href.
+window.addEventListener('click',function(ev){
+  if(ev.defaultPrevented||ev.button!==0||ev.metaKey||ev.ctrlKey||ev.shiftKey||ev.altKey)return;
+  var a=ev.target&&ev.target.closest?ev.target.closest('a[href]'):null;
+  if(!a)return;
+  var href=a.getAttribute('href')||'';
+  if(href.charAt(0)!=='#')return;
+  ev.preventDefault();
+  location.hash=href.slice(1);
+});
+
 // Forms: GET forms are proxied, everything else opens against the original site in a new tab.
 document.addEventListener('submit',function(ev){
   var f=ev.target;if(!f||!f.action)return;
