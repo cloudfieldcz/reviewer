@@ -2,7 +2,7 @@
 import { asc } from 'drizzle-orm';
 import Layout from '~/layouts/Layout.astro';
 import { listOwners, projectAccess } from '~/lib/access';
-import { COMMENT_STATUSES, listComments, type CommentStatus } from '~/lib/comments';
+import { COMMENT_STATUSES, listComments, normalizePagePath, type CommentStatus } from '~/lib/comments';
 import { db, schema } from '~/lib/db';
 import { getProject } from '~/lib/projects';
 
@@ -28,7 +28,8 @@ const directory = isAdmin
   : null;
 
 const all = listComments(project.id, {}, user);
-const pathFilter = Astro.url.searchParams.get('path') ?? '';
+const rawPath = Astro.url.searchParams.get('path');
+const pathFilter = rawPath ? normalizePagePath(rawPath) : '';
 const authorFilter = Astro.url.searchParams.get('author') ?? '';
 const rawStatus = Astro.url.searchParams.get('status') ?? '';
 const statusFilter = (COMMENT_STATUSES as readonly string[]).includes(rawStatus) ? (rawStatus as CommentStatus) : '';

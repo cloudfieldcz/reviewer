@@ -301,7 +301,7 @@ projects  id, name,
           created_by → users, created_at
 
 comments  id, project_id → projects (cascade), user_id → users (cascade),
-          page_path,         -- '/contact?x=1' – path + query, no origin
+          page_path,         -- '/contact?x=1' – path + query, no origin, no trailing slash (normalizePagePath)
           viewport,          -- 'desktop' | 'phone' – the simulated screen it was written on
           body,
           selector, xpath, text_snippet, tag_name, rect_top,   -- anchors

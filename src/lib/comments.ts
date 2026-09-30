@@ -167,7 +167,7 @@ export interface CommentInput {
   rectTop?: number | null;
 }
 
-/** Normalizes a page path coming from the client: always starts with '/', never contains the /p/{id} prefix or an origin. */
+/** Normalizes a page path coming from the client: always starts with '/', has no trailing slash (except '/'), never contains the /p/{id} prefix or an origin. */
 export function normalizePagePath(input: unknown): string {
   if (typeof input !== 'string') throw new HttpError(400, 'page_path is required');
   let p = input.trim();
@@ -177,6 +177,8 @@ export function normalizePagePath(input: unknown): string {
   }
   p = p.replace(/^\/p\/\d+(?=\/|\?|$)/, '');
   if (!p.startsWith('/')) p = '/' + p;
+  // Sites answer /a and /a/ alike; keep one key. drizzle/0005_* rewrote the older rows the same way.
+  p = p.replace(/^([^?]*?)\/+(?=\?|$)/, (_, head: string) => head || '/');
   return p.slice(0, 2000);
 }
 

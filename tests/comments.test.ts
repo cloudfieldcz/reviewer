@@ -4,7 +4,7 @@ import type { AuthUser } from '~/lib/auth';
 
 process.env.DATABASE_PATH = ':memory:';
 const { db, schema } = await import('~/lib/db');
-const { countByStatus, createComment, deleteComment, getComment, listComments, normalizeStatus, setStatus, updateComment } = await import('~/lib/comments');
+const { countByStatus, createComment, deleteComment, getComment, listComments, normalizePagePath, normalizeStatus, setStatus, updateComment } = await import('~/lib/comments');
 const { createReply, deleteReply, updateReply } = await import('~/lib/replies');
 const { setOwners } = await import('~/lib/access');
 
@@ -108,6 +108,22 @@ describe('replies', () => {
     expect(getComment(c.id, anna).replies).toHaveLength(1);
     db.delete(schema.comments).where(eq(schema.comments.id, c.id)).run();
     expect(db.select().from(schema.commentReplies).all()).toHaveLength(0);
+  });
+});
+
+describe('normalizePagePath', () => {
+  it('drops the trailing slash so /a and /a/ share comments', () => {
+    expect(normalizePagePath('/sluzby/bezpecnost/')).toBe('/sluzby/bezpecnost');
+    expect(normalizePagePath('/sluzby/bezpecnost')).toBe('/sluzby/bezpecnost');
+    expect(normalizePagePath('/a//?q=/x/')).toBe('/a?q=/x/');
+    expect(normalizePagePath('/p/1/a/')).toBe('/a');
+  });
+
+  it('keeps the root', () => {
+    expect(normalizePagePath('/')).toBe('/');
+    expect(normalizePagePath('//')).toBe('/');
+    expect(normalizePagePath('/?q=1')).toBe('/?q=1');
+    expect(normalizePagePath('')).toBe('/');
   });
 });
 
