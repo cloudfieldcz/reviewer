@@ -2,6 +2,8 @@
 
 A tool for reviewing websites. Pick a project (a website URL), see the site in a frame, click any element, write a comment – it stays anchored to that element like a tracked change in Word. Anyone can reply to a comment; a project manager – an admin, or an owner the admin picked for that project – approves or rejects it, and the export carries only the approved ones by default. Everyone sees all comments; users edit only their own while they are open.
 
+![The review screen: the target site in the frame with a hovered element and an anchored comment, the comment sidebar on the right](./docs/images/review-screen.png)
+
 No widget on the target site: the page is served through Reviewer's own reverse proxy, so the frame is same-origin and the app can work with its DOM directly.
 
 ```
