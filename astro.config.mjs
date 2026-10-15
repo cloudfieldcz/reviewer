@@ -9,6 +9,9 @@ export default defineConfig({
   adapter: node({ mode: 'standalone' }),
   integrations: [svelte()],
   server: { host: true, port: 4321 },
+  // Astro 7 defaults to 'jsx', which drops whitespace between inline elements; the templates
+  // were written against the Astro 5 behaviour.
+  compressHTML: true,
   security: {
     // Requests come through oauth2-proxy with Host = the public hostname, so the default
     // origin check would reject POSTs; the app is only reachable on the internal Docker network.

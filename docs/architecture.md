@@ -16,7 +16,7 @@ Traefik  (TLS)
 oauth2-proxy  (Entra ID OIDC, session in Redis, injects X-Forwarded-User / -Email / -Groups)
   │  HTTP, internal Docker network only
   ▼
-reviewer (Node 22, Astro 5 SSR)
+reviewer (Node 22, Astro 7 SSR)
   ├── /                     project list
   ├── /review/{id}          review screen (iframe + sidebar)
   ├── /projects/{id}/manage project management (admins), comment overview and export (managers)
@@ -56,7 +56,7 @@ screenshot-based mode remains available later for the rest.
 | Layer | Choice | Reason |
 |---|---|---|
 | Runtime | Node 22 LTS, TypeScript | |
-| Framework | Astro 5 SSR + `@astrojs/node` (standalone) | Pages, API endpoints and middleware in one app |
+| Framework | Astro 7 SSR + `@astrojs/node` (standalone) | Pages, API endpoints and middleware in one app |
 | Review UI | One Svelte 5 island (`Review.svelte`) | Only one screen is interactive; the rest is server-rendered |
 | Database | SQLite via `better-sqlite3` + Drizzle ORM | Typed queries and migrations, zero operational overhead |
 | Proxy / HTML | `undici` (fetch) + `cheerio` (rewrite) | Server-side HTML parsing and rewriting |
