@@ -7,13 +7,38 @@ on:
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
+  # Shieldoo Gate: dependency proxy + SBOM/vulnerability scans, active only when the SGW_TOKEN
+  # secret exists. Keep SGW_HOST in step with the default in ./Dockerfile.
+  SGW_PROJECT: reviewer
+  SGW_HOST: shieldoo-gate.cloudfield.cz
+  SHDG_REPO: cloudfieldcz/shieldoo-gate
 
 jobs:
+  # Secrets cannot appear in a job-level `if:`, so this job turns "is SGW_TOKEN set" into an output.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.status.outputs.enabled }}
+    steps:
+      - id: status
+        env:
+          SGW_TOKEN: ${{ secrets.SGW_TOKEN }}
+        run: |
+          if [ -n "$SGW_TOKEN" ]; then
+            echo "Shieldoo Gate: ON (project label $SGW_PROJECT)"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::SGW_TOKEN not set — building from registry.npmjs.org, no vulnerability scan"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
   docker:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -40,8 +65,82 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # An empty secret is a no-op: the Dockerfile then installs from registry.npmjs.org.
+          secrets: |
+            sgw_token=${{ secrets.SGW_TOKEN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # SBOM + vulnerability scan uploaded to the gate. `--fail-on` gates on findings that are *new*
+  # against the component's previous scan, not on the absolute count. The source tree fails on
+  # high; the image only on critical, because base-image CVEs often have no fix on release day.
+  vuln-scan:
+    name: Vuln-scan ${{ matrix.component }}
+    needs: [gate, docker]
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read # trivy pulls the image back from ghcr.io
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { component: app, fail_on: high }
+          - { component: image, fail_on: critical }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Latest shdg release, verified against its SHA256SUMS. It brings its own pinned Trivy.
+      - name: Install shdg
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=$(gh api "repos/$SHDG_REPO/releases/latest" -q .tag_name)
+          TARBALL="shdg-${TAG#v}-linux-amd64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/shdg" && cd "$RUNNER_TEMP/shdg"
+          gh release download "$TAG" -R "$SHDG_REPO" -p "$TARBALL" -p SHA256SUMS
+          grep " ${TARBALL}\$" SHA256SUMS | sha256sum --check --strict
+          tar -xzf "$TARBALL"
+          echo "$PWD" >> "$GITHUB_PATH"
+          ./shdg version
+
+      - name: Scan ${{ matrix.component }}
+        env:
+          SHIELDOO_URL: https://${{ env.SGW_HOST }}
+          SHIELDOO_TOKEN: ${{ secrets.SGW_TOKEN }}
+          IMAGE_REF: ${{ env.IMAGE }}:${{ needs.docker.outputs.version }}
+        run: |
+          if [ "${{ matrix.component }}" = image ]; then
+            src=(--image "$IMAGE_REF" --ecosystem docker)
+          else
+            src=(--dir . --ecosystem npm --skip-dirs node_modules,dist,.astro)
+          fi
+          shdg scan --project "$SGW_PROJECT" --component ${{ matrix.component }} "${src[@]}" \
+            --sbom-output sbom-${{ matrix.component }}.cdx.json \
+            --wait --fail-on ${{ matrix.fail_on }} --timeout 20m
+
+      # Trivy reports an unparsed manifest exactly like a clean one; zero packages is not a pass.
+      - name: Assert the SBOM is not empty
+        run: |
+          n=$(jq '.components | length' sbom-${{ matrix.component }}.cdx.json)
+          echo "${{ matrix.component }}: $n components"
+          [ "$n" -ge 10 ] || { echo "::error::SBOM has only $n components — the scan parsed nothing"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sbom-${{ matrix.component }}
+          path: sbom-${{ matrix.component }}.cdx.json
+          if-no-files-found: warn
+          retention-days: 30
 
   # GitHub Release with notes generated from the commits since the previous tag.
   # Runs after the image exists, so the release never points at a missing image.

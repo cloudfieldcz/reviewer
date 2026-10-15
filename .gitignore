@@ -30,3 +30,6 @@ npm-debug.log*
 
 # MCP / browser tooling artifacts
 .playwright-mcp/
+
+# local vulnerability reports, SBOMs and gate SQL (see README, "Dependency proxy")
+docs/vulnerabilities/

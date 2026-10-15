@@ -25,7 +25,7 @@ Documentation: [`docs/functional-spec.md`](./docs/functional-spec.md) – what t
 ## Local development (no oauth2-proxy)
 
 ```bash
-npm install
+npm install                 # or scripts/npm-ci.sh – through the Shieldoo Gate when SGW_TOKEN is set
 cp .env.example .env        # DEV_USER=you@example.com:admin, ALLOW_PRIVATE_TARGETS=true …
 npm run dev                 # http://localhost:4321
 ```
@@ -89,6 +89,30 @@ step runs after the image build, so a release never points at an image that fail
 deployment forward, pull and recreate: `docker compose pull reviewer && docker compose up -d reviewer`.
 
 The app listens only on the internal Docker network and rejects requests without the identity headers (`401`), so it cannot be used without going through oauth2-proxy. Backup = copy `/data/reviewer.db` from the `reviewer-data` volume.
+
+### Dependency proxy and vulnerability scanning (optional)
+
+Everything here switches on with one token, `SGW_TOKEN`, for a
+[Shieldoo Gate](https://github.com/cloudfieldcz/shieldoo-gate) instance (project label `reviewer`). The
+gate is a pull-through npm proxy that scans and caches every package it serves, and it stores SBOMs and
+their vulnerability findings. Without the token, builds go straight to `registry.npmjs.org` and nothing
+is scanned.
+
+| Where | With `SGW_TOKEN` |
+|---|---|
+| `Dockerfile` | `npm ci` goes through `npm.<SGW_HOST>`. The token is a BuildKit secret: `docker build --secret id=sgw_token,env=SGW_TOKEN .` |
+| `release.yml` | the same build, then the `vuln-scan` job uploads SBOMs of the source tree (`app`, fails on new *high*) and of the pushed image (`image`, fails on new *critical*) |
+| `scripts/npm-ci.sh` | local `npm ci` through the gate |
+| `scripts/vuln-scan.sh` | local SBOM upload with [`shdg`](https://github.com/cloudfieldcz/shieldoo-gate/releases) (`npm audit` without it); pass an image ref to scan an image |
+
+For CI, set the repository secret `SGW_TOKEN`. `SGW_HOST` / `SGW_USER` (build args, and env for the
+scripts) point at another gate or project label. Install packages through the gate, but add them
+without it (`npm install <pkg>`), so `package-lock.json` keeps upstream URLs. The gate answers a
+package it quarantines with `403`; release it in the gate's admin UI and re-run the build.
+
+`--fail-on` counts only findings that are new since the component's previous scan. For the absolute
+state, look at the gate UI or query its database. Local reports, SBOMs and those queries belong in
+`docs/vulnerabilities/`, which is gitignored.
 
 ### Entra ID app registration
 

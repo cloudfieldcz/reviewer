@@ -16,7 +16,7 @@ Documentation, all of it worth keeping current:
 
 ## Stack
 
-Astro 5 SSR (`output: 'server'`, `@astrojs/node` standalone) · Svelte 5 (runes) for the single
+Astro 7 SSR (`output: 'server'`, `@astrojs/node` standalone) · Svelte 5 (runes) for the single
 interactive island · Tailwind 4 via `@tailwindcss/vite` · Drizzle ORM + better-sqlite3 ·
 cheerio (HTML rewriting) · undici (target fetches) · vitest · Node 22.
 
@@ -160,6 +160,10 @@ viewport's comments; the others are announced in the sidebar with a one-click sw
   headers and can point at the wrong host.
 - oauth2-proxy sends no display name by default, so the UI shows the UPN/e-mail unless
   `X-Forwarded-Name` is configured via its alpha config.
+- Shieldoo Gate (npm proxy + SBOM scans) is opt-in on `SGW_TOKEN` everywhere – Dockerfile secret,
+  `release.yml`, `scripts/npm-ci.sh`, `scripts/vuln-scan.sh`. Pass the token as a BuildKit secret, never a
+  build arg. Never `npm install` through the gate (the lockfile must keep upstream URLs). Vulnerability
+  reports, SBOMs and gate SQL go to `docs/vulnerabilities/` (gitignored) – never commit them.
 - Deployment is a self-contained stack (`deploy/docker-compose.yaml`: Traefik + Redis +
   oauth2-proxy + reviewer) configured from `deploy/.env`; see the Deployment section of `README.md`.
   Keep it environment-agnostic – no organisation-specific hostnames, tenant ids or e-mails.
