@@ -17,6 +17,10 @@ export const projects = sqliteTable('projects', {
   name: text('name').notNull(),
   /** https://test.example.com  (no trailing slash) */
   baseUrl: text('base_url').notNull(),
+  /** 'url' (proxied website) | 'static' (uploaded build served from SITES_DIR; base_url is '') */
+  kind: text('kind').notNull().default('url'),
+  /** When the last upload of a 'static' project finished; null until then. */
+  siteUploadedAt: text('site_uploaded_at'),
   createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
 });
@@ -42,6 +46,8 @@ export const comments = sqliteTable(
     textSnippet: text('text_snippet'),
     tagName: text('tag_name'),
     rectTop: real('rect_top'),
+    /** JSON `{label?, state?}` from the page's `reviewerContext()` at the time of the comment; null if the page has none. */
+    context: text('context'),
     /** 'open' | 'approved' | 'rejected' – the verdict on the comment; SQLite has no enum, `normalizeStatus()` is the gate. */
     status: text('status').notNull().default('open'),
     /** When the status was last changed; null while open. */

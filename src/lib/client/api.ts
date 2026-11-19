@@ -18,7 +18,7 @@ async function call<T>(url: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   listComments: (projectId: number, path: string) =>
     call<CommentDto[]>(`/api/comments?project=${projectId}&path=${encodeURIComponent(path)}`),
-  createComment: (projectId: number, pagePath: string, viewport: Viewport, body: string, anchor: Anchor) =>
+  createComment: (projectId: number, pagePath: string, viewport: Viewport, body: string, anchor: Anchor, context?: unknown) =>
     call<CommentDto>('/api/comments', {
       method: 'POST',
       body: JSON.stringify({
@@ -31,6 +31,7 @@ export const api = {
         text_snippet: anchor.textSnippet,
         tag_name: anchor.tagName,
         rect_top: anchor.rectTop,
+        context,
       }),
     }),
   updateComment: (id: number, body: string) => call<CommentDto>(`/api/comments/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) }),

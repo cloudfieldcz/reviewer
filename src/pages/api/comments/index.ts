@@ -26,6 +26,7 @@ export const POST: APIRoute = handler(async (ctx) => {
       textSnippet: str(b.text_snippet ?? b.textSnippet, 200),
       tagName: str(b.tag_name ?? b.tagName, 50)?.toLowerCase(),
       rectTop: Number.isFinite(rectTop) ? rectTop : null,
+      context: b.context,
     },
     ctx.locals.user,
   );
