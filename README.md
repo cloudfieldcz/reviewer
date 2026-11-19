@@ -48,6 +48,7 @@ docker compose up --build   # same thing in Docker, still without auth (see dock
 | Variable | Default | Meaning |
 |---|---|---|
 | `DATABASE_PATH` | `./data/reviewer.db` (`/data/reviewer.db` in Docker) | SQLite file; parent dir is created |
+| `SITES_DIR` | `./data/sites` (`/data/sites` in Docker) | Uploaded sites, one folder per project id |
 | `PUBLIC_ORIGIN` | derived from `X-Forwarded-Proto/Host` | Public origin of Reviewer, e.g. `https://reviewer.example.com`. Used for absolute links inside proxied pages – set it in production |
 | `ADMIN_EMAILS` | – | Comma-separated bootstrap admins (case-insensitive). Keep empty once app roles are assigned |
 | `DEFAULT_ROLE` | – | Role for signed-in users without an `ADMIN`/`USER` app role: `user`, or empty (→ 403). `admin` also works, for local dev only |

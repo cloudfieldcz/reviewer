@@ -4,6 +4,7 @@ import type { AuthUser } from './auth';
 import { db, schema } from './db';
 import type { Project } from './db/schema';
 import { HttpError } from './http';
+import { deleteSite } from './sites';
 import { fetchTarget } from './proxy/fetch';
 import { assertPublicHost, normalizeBaseUrl } from './url';
 
@@ -11,6 +12,7 @@ export interface ProjectTile {
   id: number;
   name: string;
   baseUrl: string;
+  kind: string;
   createdAt: string;
   commentCount: number;
   lastCommentAt: string | null;
@@ -30,6 +32,7 @@ export function listProjects(viewer: AuthUser): ProjectTile[] {
       id: schema.projects.id,
       name: schema.projects.name,
       baseUrl: schema.projects.baseUrl,
+      kind: schema.projects.kind,
       createdAt: schema.projects.createdAt,
       commentCount: sql<number>`count(${schema.comments.id})`,
       lastCommentAt,
@@ -52,6 +55,8 @@ export function getProject(id: number): Project {
 export interface ProjectInput {
   name: string;
   baseUrl: string;
+  /** 'url' (default) or 'static' – an uploaded site, which has no base URL. */
+  kind: 'url' | 'static';
 }
 
 async function validateInput(input: Partial<ProjectInput>, partial = false): Promise<Partial<ProjectInput>> {
@@ -60,6 +65,11 @@ async function validateInput(input: Partial<ProjectInput>, partial = false): Pro
     const name = (input.name ?? '').trim();
     if (!name) throw new HttpError(400, 'Name is required');
     out.name = name.slice(0, 200);
+  }
+  if (input.kind === 'static') {
+    out.kind = 'static';
+    out.baseUrl = '';
+    return out;
   }
   if (input.baseUrl !== undefined || !partial) {
     let baseUrl: string;
@@ -75,13 +85,21 @@ async function validateInput(input: Partial<ProjectInput>, partial = false): Pro
 }
 
 export async function createProject(input: Partial<ProjectInput>, userId: number): Promise<Project> {
-  const v = (await validateInput(input)) as ProjectInput;
+  const v = (await validateInput({ ...input, kind: input.kind === 'static' ? 'static' : 'url' })) as ProjectInput;
   return db.insert(schema.projects).values({ ...v, createdBy: userId }).returning().get();
 }
 
+export function markSiteUploaded(id: number): Project {
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const row = db.update(schema.projects).set({ siteUploadedAt: now }).where(eq(schema.projects.id, id)).returning().get();
+  if (!row) throw new HttpError(404, 'Project not found');
+  return row;
+}
+
 export async function updateProject(id: number, input: Partial<ProjectInput>): Promise<Project> {
-  getProject(id);
-  const v = await validateInput(input, true);
+  const current = getProject(id);
+  // The kind is fixed at creation; a static project has no address to change.
+  const v = await validateInput(current.kind === 'static' ? { name: input.name } : { ...input, kind: undefined }, true);
   if (Object.keys(v).length === 0) throw new HttpError(400, 'Nothing to update');
   // `validateInput` awaits a DNS lookup, so the row may be gone by the time we write – unlike the
   // synchronous read-then-write paths elsewhere, this one has to check what the update actually hit.
@@ -90,9 +108,10 @@ export async function updateProject(id: number, input: Partial<ProjectInput>): P
   return row;
 }
 
-export function deleteProject(id: number): void {
+export async function deleteProject(id: number): Promise<void> {
   getProject(id);
   db.delete(schema.projects).where(eq(schema.projects.id, id)).run();
+  await deleteSite(id);
 }
 
 /** Quick reachability check used by the "new project" form: does the URL answer with HTML? */

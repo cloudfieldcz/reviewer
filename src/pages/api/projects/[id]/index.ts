@@ -10,8 +10,8 @@ export const PATCH: APIRoute = handler(async (ctx) => {
   return json(await updateProject(idParam(ctx.params.id), { name: str(body.name), baseUrl: str(body.baseUrl ?? body.base_url) }));
 });
 
-export const DELETE: APIRoute = handler((ctx) => {
+export const DELETE: APIRoute = handler(async (ctx) => {
   requireAdmin(ctx);
-  deleteProject(idParam(ctx.params.id));
+  await deleteProject(idParam(ctx.params.id));
   return new Response(null, { status: 204 });
 });

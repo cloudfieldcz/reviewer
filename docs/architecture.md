@@ -249,6 +249,24 @@ query or fragment, and the host must resolve to public addresses (an SSRF guard 
 `ALLOW_HTTP_TARGETS` and `ALLOW_PRIVATE_TARGETS` relax the last two for local development. Proxied
 responses are served `no-store` and `noindex`.
 
+## Uploaded sites (`kind = 'static'`)
+
+A project is either a proxied website (`kind = 'url'`, default) or an uploaded build (`'static'`, `base_url = ''`).
+An admin uploads a built folder on the manage page (`POST /api/projects/:id/site`, multipart, one `files` part
+per file named by its relative path; the picked folder's own name is stripped, `..`/absolute/backslash paths are
+rejected, 3000 files / 150 MB, `index.html` required at the root). Files are written to a fresh sibling folder and
+swapped in, so a half-finished upload never serves. They live in `SITES_DIR/{projectId}`, and deleting the project
+deletes the folder. `GET /p/{id}/{path}` serves them (`lib/sites.ts`): existing file, else the root `index.html` for an
+extension-less path (SPA fallback), else 404. Every HTML response gets `<base href="/p/{id}/">` and a *reduced*
+inject script – navigation reporting only, no click/form/fragment interception, because the site is same-origin and
+routes itself. No probe, SSRF guard or fetch happens for these projects.
+
+**Page context.** A page may define `window.reviewerContext()` → `{label?, state?}`; the review screen sends it as
+`context` with every new comment (`comments.context`, JSON, `state` dropped above 256 KB). A card with a `state`
+offers *Restore state*: the island calls `window.reviewerRestore(state)` and, when it returns truthy, reloads the
+frame at the comment's path. `?comment=<id>` on the review URL does the same on first load. An element carrying
+`data-poc-anchor="…"` is anchored by that attribute in preference to any derived selector.
+
 ## Element anchoring
 
 The hardest requirement is that a comment still points at the right element after the site has been

@@ -12,6 +12,7 @@ services:
       ALLOW_PRIVATE_TARGETS: "true"
       ALLOW_HTTP_TARGETS: "true"
       PUBLIC_ORIGIN: "http://localhost:4321"
+      SITES_DIR: "/data/sites"
     volumes:
       - reviewer-data:/data
     restart: unless-stopped
