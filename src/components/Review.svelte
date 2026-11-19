@@ -5,7 +5,7 @@
   import { Overlay } from '~/lib/client/overlay';
 
   interface Props {
-    project: { id: number; name: string; baseUrl: string };
+    project: { id: number; name: string; baseUrl: string; kind: string };
     user: { id: number; name: string };
     /**
      * What the viewer may do on this project, computed on the server. A rendering hint only – the
@@ -15,15 +15,21 @@
     access: ProjectAccess;
     initialPath: string;
     initialDevice: Viewport;
+    /** `?comment=<id>`: focus (and restore the state of) this comment on the first frame load. */
+    initialComment?: number | null;
   }
-  let { project, user, access, initialPath, initialDevice }: Props = $props();
+  let { project, user, access, initialPath, initialDevice, initialComment = null }: Props = $props();
 
   const PREFIX = `/p/${project.id}`;
   const INTRO_KEY = 'reviewer.intro.v2';
   const DEVICE_KEY = 'reviewer.device';
   /** iPhone 15 CSS viewport; the bezel is cosmetic and sits outside the page box. */
   const PHONE = { w: 393, h: 852, bezel: 14, top: 40 };
-  const host = project.baseUrl.replace(/^https?:\/\//, '');
+  const isStatic = project.kind === 'static';
+  const host = isStatic ? 'Uploaded site' : project.baseUrl.replace(/^https?:\/\//, '');
+  /** Hooks an uploaded prototype may define on its window (see docs/architecture.md). */
+  type PrototypeWindow = Window & { reviewerContext?: () => unknown; reviewerRestore?: (state: unknown) => unknown };
+  let deepLink: number | null = initialComment;
 
   // ---- state ----------------------------------------------------------------
   let iframe = $state<HTMLIFrameElement | null>(null);
@@ -257,6 +263,41 @@
     };
 
     await loadComments();
+    if (deepLink != null) {
+      const id = deepLink;
+      deepLink = null;
+      const c = comments.find((x) => x.id === id);
+      if (c) openComment(c);
+    }
+  }
+
+  /** Deep link: show the comment's device and status, then restore its state when it has one, else just focus it. */
+  function openComment(c: CommentDto) {
+    setDevice(c.viewport);
+    statusFilter = { ...statusFilter, [c.status]: true };
+    if (c.context?.state !== undefined) {
+      if (restoreState(c)) return;
+    }
+    focusComment(c.id, { scrollFrame: true, scrollSidebar: true });
+  }
+
+  /** Asks the prototype to write the comment's state into its own storage, then reloads the frame so it re-reads it. */
+  function restoreState(c: CommentDto): boolean {
+    const win = iframe?.contentWindow as PrototypeWindow | null | undefined;
+    let ok = false;
+    try {
+      ok = !!win?.reviewerRestore?.(c.context?.state);
+    } catch {
+      ok = false;
+    }
+    if (!win || !ok) {
+      error = 'This page cannot restore the saved state.';
+      return false;
+    }
+    error = null;
+    activeId = c.id; // loadComments() focuses it once the frame has reloaded
+    win.location.assign(frameSrc(c.pagePath));
+    return true;
   }
 
   function setPath(p: string) {
@@ -395,7 +436,13 @@
     draft.saving = true;
     error = null;
     try {
-      const created = await api.createComment(project.id, path, device, draft.body, draft.anchor);
+      let context: unknown;
+      try {
+        context = (iframe?.contentWindow as PrototypeWindow | null | undefined)?.reviewerContext?.() ?? undefined;
+      } catch {
+        context = undefined; // a broken hook must never block the comment
+      }
+      const created = await api.createComment(project.id, path, device, draft.body, draft.anchor, context);
       comments = [...comments, created];
       if (draftEl) elements.set(created.id, draftEl);
       resolved = { ...resolved, [created.id]: { method: 'selector' } };
@@ -656,9 +703,11 @@
       <input class="chrome-input" bind:value={pathInput} spellcheck="false" placeholder="/path" aria-label="Page path" />
     </form>
 
+    {#if !isStatic}
     <a class="chrome-btn !px-1.5" href={project.baseUrl + path} target="_blank" rel="noopener" title="Open this page on the real site">
       <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h7v7M13 3 7 9M11 9.5V13H3V5h3.5" /></svg>
     </a>
+    {/if}
 
     <span class="mx-1 h-6 w-px bg-white/10"></span>
 
@@ -830,7 +879,7 @@
             <button class={filter === 'mine' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'mine')} aria-pressed={filter === 'mine'}>Mine {mineCount}</button>
           </div>
         </div>
-        <p class="meta mt-1 truncate" title={project.baseUrl + path}>{path}</p>
+        <p class="meta mt-1 truncate" title={isStatic ? path : project.baseUrl + path}>{path}</p>
         <div class="mt-1.5 flex gap-1" role="group" aria-label="Filter by status">
           {#each ['open', 'approved', 'rejected'] as const as st (st)}
             {@const on = statusFilter[st]}
@@ -949,6 +998,10 @@
               {#if c.textSnippet}<span class="text-xs italic text-gray-500"> “{c.textSnippet}”</span>{/if}
             </p>
 
+            {#if c.context?.label}
+              <p class="mb-2 text-[11px] leading-4 text-gray-500">{c.context.label}</p>
+            {/if}
+
             {#if !found}
               <p class="mb-2 inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800" title="The element this comment was anchored to is no longer on the page (site changed?). The comment is kept.">
                 Element not found
@@ -1030,7 +1083,12 @@
               </div>
             {:else if editing?.id !== c.id}
               <div class="mt-2 flex items-center justify-between gap-1 text-xs">
-                <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startReply(c); }}>Reply</button>
+                <div class="flex gap-1">
+                  <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startReply(c); }}>Reply</button>
+                  {#if c.context?.state !== undefined}
+                    <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); restoreState(c); }} title="Put the prototype back into the state it was in when this comment was made">Restore state</button>
+                  {/if}
+                </div>
                 <div class="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                   {#if canManage}
                     {#if decided}

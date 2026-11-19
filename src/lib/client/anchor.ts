@@ -73,21 +73,36 @@ export function xpathOf(el: Element): string {
   return '/html/' + parts.join('/');
 }
 
-export function computeAnchor(el: Element, doc: Document): Anchor {
-  let selector: string | null = null;
+/** Explicit anchor a prototype puts on an element it wants commentable, e.g. `data-poc-anchor="finding:f1"`. */
+export const POC_ANCHOR_ATTR = 'data-poc-anchor';
+
+/** `[data-poc-anchor="…"]` when the element carries one and it is unique in the document – beats anything finder would derive. */
+function pocAnchorSelector(el: Element, doc: Document): string | null {
+  const value = el.getAttribute(POC_ANCHOR_ATTR);
+  if (!value) return null;
+  const sel = `[${POC_ANCHOR_ATTR}="${CSS.escape(value)}"]`;
   try {
-    selector = finder(el, {
+    return doc.querySelectorAll(sel).length === 1 ? sel : null;
+  } catch {
+    return null;
+  }
+}
+
+export function computeAnchor(el: Element, doc: Document): Anchor {
+  let selector: string | null = pocAnchorSelector(el, doc);
+  try {
+    if (!selector) selector = finder(el, {
       root: doc.body,
       // Ignore our own overlay nodes and volatile framework classes/ids.
       className: (n) => defaultClassName(n) && !/^(svelte-|astro-|css-|sc-|_)|[0-9a-f]{6,}/i.test(n),
       idName: (n) => defaultIdName(n) && !/[0-9a-f]{8,}|^(radix|headlessui|react-aria)/i.test(n),
-      attr: (name, value) => (name === 'data-testid' || name === 'name' || name === 'aria-label') && defaultAttr(name, value),
+      attr: (name, value) => name === POC_ANCHOR_ATTR || ((name === 'data-testid' || name === 'name' || name === 'aria-label') && defaultAttr(name, value)),
       seedMinLength: 2,
       optimizedMinLength: 2,
       timeoutMs: 300,
     });
   } catch {
-    selector = null;
+    /* no selector – xpath and text still anchor the comment */
   }
   const rect = el.getBoundingClientRect();
   const win = doc.defaultView!;
