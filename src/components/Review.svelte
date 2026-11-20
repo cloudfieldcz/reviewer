@@ -168,8 +168,12 @@
   }
 
   // The cursor inside the frame is the fastest way to tell the two modes apart.
+  // Read `picking` before touching `overlay`: on the first run there is no overlay yet, and
+  // `overlay?.setPicking(picking)` would short-circuit without reading it, so the effect would
+  // never subscribe and the cursor would stay as the frame loaded it.
   $effect(() => {
-    overlay?.setPicking(picking);
+    const on = picking;
+    overlay?.setPicking(on);
   });
 
   /** The card returns on every visit until the reviewer opts out of it. */
