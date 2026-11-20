@@ -57,6 +57,8 @@ export interface ProjectInput {
   baseUrl: string;
   /** 'url' (default) or 'static' – an uploaded site, which has no base URL. */
   kind: 'url' | 'static';
+  /** Offer the iPhone 15 viewport on the review screen (default on). */
+  phoneView: boolean;
 }
 
 async function validateInput(input: Partial<ProjectInput>, partial = false): Promise<Partial<ProjectInput>> {
@@ -66,6 +68,7 @@ async function validateInput(input: Partial<ProjectInput>, partial = false): Pro
     if (!name) throw new HttpError(400, 'Name is required');
     out.name = name.slice(0, 200);
   }
+  if (input.phoneView !== undefined) out.phoneView = input.phoneView;
   if (input.kind === 'static') {
     out.kind = 'static';
     out.baseUrl = '';
@@ -99,7 +102,7 @@ export function markSiteUploaded(id: number): Project {
 export async function updateProject(id: number, input: Partial<ProjectInput>): Promise<Project> {
   const current = getProject(id);
   // The kind is fixed at creation; a static project has no address to change.
-  const v = await validateInput(current.kind === 'static' ? { name: input.name } : { ...input, kind: undefined }, true);
+  const v = await validateInput(current.kind === 'static' ? { name: input.name, phoneView: input.phoneView } : { ...input, kind: undefined }, true);
   if (Object.keys(v).length === 0) throw new HttpError(400, 'Nothing to update');
   // `validateInput` awaits a DNS lookup, so the row may be gone by the time we write – unlike the
   // synchronous read-then-write paths elsewhere, this one has to check what the update actually hit.

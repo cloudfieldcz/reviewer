@@ -5,7 +5,8 @@
   import { Overlay } from '~/lib/client/overlay';
 
   interface Props {
-    project: { id: number; name: string; baseUrl: string; kind: string };
+    /** `phoneView: false` – the site is not built for phones: no viewport switch, always desktop. */
+    project: { id: number; name: string; baseUrl: string; kind: string; phoneView: boolean };
     user: { id: number; name: string };
     /**
      * What the viewer may do on this project, computed on the server. A rendering hint only – the
@@ -133,7 +134,7 @@
   }
 
   function setDevice(d: Viewport) {
-    if (device === d) return;
+    if (device === d || (d === 'phone' && !project.phoneView)) return;
     device = d;
     cancelDraft();
     activeId = null;
@@ -623,7 +624,7 @@
     window.addEventListener('message', onMessage);
     window.addEventListener('keydown', onKeydown);
     window.addEventListener('keyup', onKeyup);
-    if (!new URL(location.href).searchParams.has('device')) {
+    if (project.phoneView && !new URL(location.href).searchParams.has('device')) {
       try {
         const saved = localStorage.getItem(DEVICE_KEY);
         if (saved === 'phone' || saved === 'desktop') device = saved;
@@ -710,6 +711,7 @@
     </a>
     {/if}
 
+    {#if project.phoneView}
     <span class="mx-1 h-6 w-px bg-white/10"></span>
 
     <!-- Viewport: the site is rendered at the real width, so responsive layouts can be reviewed too. -->
@@ -733,6 +735,7 @@
         <span class="hidden xl:inline">iPhone 15</span>
       </button>
     </div>
+    {/if}
 
     <span class="mx-1 h-6 w-px bg-white/10"></span>
 
@@ -870,10 +873,12 @@
         <div class="flex items-center justify-between gap-2">
           <div class="flex min-w-0 items-center gap-1.5">
             <h2 class="text-sm font-semibold tracking-tight">Comments</h2>
+            {#if project.phoneView}
             <span
               class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500"
               title="Comments belong to the viewport they were written in – the page renders differently on a phone"
             >{deviceLabel}</span>
+            {/if}
           </div>
           <div class="seg" role="group" aria-label="Filter comments">
             <button class={filter === 'all' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'all')} aria-pressed={filter === 'all'}>All {inStatus.length}</button>
@@ -901,7 +906,8 @@
             </button>
           {/each}
         </div>
-        {#if otherCount > 0}
+        <!-- Without the phone view its comments stay in the manage table; there is nothing to switch to. -->
+        {#if otherCount > 0 && project.phoneView}
           <button
             class="mt-1.5 flex w-full items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-left text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-100"
             onclick={() => setDevice(device === 'phone' ? 'desktop' : 'phone')}
@@ -950,7 +956,7 @@
             <p class="text-sm font-medium text-gray-700">
               {filter === 'mine' ? 'Nothing from you here' : 'No comments here'}
             </p>
-            <p class="mt-0.5 text-xs text-gray-400">{path} · {deviceLabel}</p>
+            <p class="mt-0.5 text-xs text-gray-400">{path}{project.phoneView ? ` · ${deviceLabel}` : ''}</p>
             {#if hiddenCount > 0}
               <p class="mt-1 text-xs text-gray-500">{hiddenCount} {hiddenCount === 1 ? 'comment is' : 'comments are'} hidden by the status filter.</p>
             {/if}

@@ -339,7 +339,10 @@ users     id, oid (unique, Entra object id), email, name,
           created_at, last_seen_at
 
 projects  id, name,
-          base_url,          -- https://site.example.com, no trailing slash
+          base_url,          -- https://site.example.com, no trailing slash ('' for an uploaded site)
+          kind,              -- 'url' | 'static'
+          site_uploaded_at,  -- last finished upload of a static project, null until then
+          phone_view,        -- 1 | 0, default 1: offer the iPhone 15 viewport on the review screen
           created_by → users, created_at
 
 comments  id, project_id → projects (cascade), user_id → users (cascade),

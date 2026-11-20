@@ -50,6 +50,13 @@
       "when": 1795120850700,
       "tag": "0006_wooden_blob",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1795164418041,
+      "tag": "0007_special_jazinda",
+      "breakpoints": true
     }
   ]
 }

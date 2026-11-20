@@ -1,3 +1,4 @@
+import type { APIContext } from 'astro';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AuthUser } from '~/lib/auth';
 
@@ -6,8 +7,9 @@ import type { AuthUser } from '~/lib/auth';
 // Type checking cannot see that, so this has to run against a real database.
 process.env.DATABASE_PATH = ':memory:';
 const { db, schema } = await import('~/lib/db');
-const { listProjects } = await import('~/lib/projects');
+const { getProject, listProjects, updateProject } = await import('~/lib/projects');
 const { setOwners } = await import('~/lib/access');
+const { PATCH } = await import('~/pages/api/projects/[id]/index');
 
 const admin: AuthUser = { id: 1, oid: 'oid-1', email: 'a@b.cz', name: 'A', role: 'admin' };
 const owner: AuthUser = { id: 2, oid: 'oid-2', email: 'o@b.cz', name: 'O', role: 'user' };
@@ -73,5 +75,64 @@ describe('listProjects', () => {
     expect(asStranger.find((p) => p.name === 'owned')!.commentCount).toBe(3);
 
     expect(listProjects(admin).every((p) => p.canManage)).toBe(true);
+  });
+});
+
+describe('phone view flag', () => {
+  function patch(id: number, body: unknown, user: AuthUser) {
+    const request = new Request(`http://reviewer.test/api/projects/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const ctx = { request, params: { id: String(id) }, locals: { user }, url: new URL(request.url) } as unknown as APIContext;
+    return PATCH(ctx);
+  }
+
+  it('is on for a new project and for every project that existed before the column', () => {
+    project(1, 'site', '2026-01-01 00:00:00');
+    expect(getProject(1).phoneView).toBe(true);
+  });
+
+  it('is switched off and on again through updateProject, without touching the rest', async () => {
+    project(1, 'site', '2026-01-01 00:00:00');
+    expect((await updateProject(1, { phoneView: false })).phoneView).toBe(false);
+    expect(getProject(1)).toMatchObject({ name: 'site', baseUrl: 'https://site.example.com', phoneView: false });
+    // Renaming alone leaves the flag as it is.
+    await updateProject(1, { name: 'renamed' });
+    expect(getProject(1)).toMatchObject({ name: 'renamed', phoneView: false });
+    expect((await updateProject(1, { phoneView: true })).phoneView).toBe(true);
+  });
+
+  it('can be switched off on an uploaded-site project, whose base URL stays empty', async () => {
+    db.insert(schema.projects).values({ id: 2, name: 'proto', baseUrl: '', kind: 'static', createdBy: 1 }).run();
+    await updateProject(2, { name: 'proto', phoneView: false });
+    expect(getProject(2)).toMatchObject({ name: 'proto', baseUrl: '', kind: 'static', phoneView: false });
+  });
+
+  it('PATCH takes a boolean and refuses anything else', async () => {
+    project(1, 'site', '2026-01-01 00:00:00');
+    let res = await patch(1, { phoneView: false }, admin);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { phoneView: boolean }).phoneView).toBe(false);
+    expect(getProject(1).phoneView).toBe(false);
+
+    for (const bad of ['true', 'false', 0, 1, null]) {
+      res = await patch(1, { phoneView: bad }, admin);
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+    }
+    expect(getProject(1).phoneView).toBe(false);
+
+    res = await patch(1, { phone_view: true }, admin);
+    expect(res.status).toBe(200);
+    expect(getProject(1).phoneView).toBe(true);
+  });
+
+  it('PATCH stays admin-only: an owner cannot change it', async () => {
+    project(1, 'site', '2026-01-01 00:00:00');
+    setOwners(1, [owner.id], admin);
+    const res = await patch(1, { phoneView: false }, owner);
+    expect(res.status).toBe(403);
+    expect(getProject(1).phoneView).toBe(true);
   });
 });

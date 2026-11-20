@@ -91,6 +91,13 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
             <button class="btn-primary" type="submit">Save</button>
             <button class="btn-danger" type="button" id="delete-btn">Delete project</button>
           </div>
+          <label class="flex items-start gap-2 text-sm sm:col-span-3">
+            <input name="phoneView" type="checkbox" class="mt-0.5 h-4 w-4 rounded border-gray-300 accent-[var(--color-brand)]" checked={project.phoneView} />
+            <span>
+              <span class="block font-medium text-gray-700">Phone view (iPhone 15)</span>
+              <span class="block text-xs text-gray-500">Turn off for sites that are not built for phones.</span>
+            </span>
+          </label>
         </form>
         <p id="project-msg" class="mt-2 min-h-5 text-sm"></p>
       </section>
@@ -255,11 +262,13 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
   const projectMsg = document.getElementById('project-msg');
   document.getElementById('project-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const fd = new FormData(e.target as HTMLFormElement);
+    const form = e.target as HTMLFormElement;
+    const fd = new FormData(form);
+    const phoneView = (form.elements.namedItem('phoneView') as HTMLInputElement).checked;
     const res = await fetch(`/api/projects/${projectId}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: fd.get('name'), ...(fd.has('baseUrl') ? { baseUrl: fd.get('baseUrl') } : {}) }),
+      body: JSON.stringify({ name: fd.get('name'), ...(fd.has('baseUrl') ? { baseUrl: fd.get('baseUrl') } : {}), phoneView }),
     });
     const data = await res.json().catch(() => ({}));
     flash(projectMsg, res.ok ? 'Saved.' : data.error ?? `Error ${res.status}`, res.ok);

@@ -178,7 +178,7 @@ GET    /api/projects                             both roles
 POST   /api/projects                             admin   { name, baseUrl }
 POST   /api/projects/probe                       admin   { url } → { ok, status, title, error }
 GET    /api/projects/:id
-PATCH  /api/projects/:id                         admin
+PATCH  /api/projects/:id                         admin   { name?, baseUrl?, phoneView?: boolean }
 DELETE /api/projects/:id                         admin   (cascades to comments)
 GET    /api/projects/:id/export?format=csv|md|json[&status=approved,rejected|all][&path=/x][&download=0]
                                                  admin or owner; status defaults to approved, unknown values → 400

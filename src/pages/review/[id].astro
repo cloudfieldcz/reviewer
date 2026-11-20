@@ -21,8 +21,9 @@ try {
 } catch {
   initialPath = '/';
 }
-// A comment link from the admin table carries the viewport it was written in.
-const initialDevice = normalizeViewport(Astro.url.searchParams.get('device'));
+// A comment link from the admin table carries the viewport it was written in. A project without the
+// phone view is always reviewed on the desktop, whatever the link says.
+const initialDevice = project.phoneView ? normalizeViewport(Astro.url.searchParams.get('device')) : 'desktop';
 // A shared link to one comment: the island focuses it (and restores its state) on the first frame load.
 const rawComment = Number(Astro.url.searchParams.get('comment'));
 const initialComment = Number.isInteger(rawComment) && rawComment > 0 ? rawComment : null;
@@ -34,7 +35,7 @@ const access = projectAccess(project.id, user);
 <Layout title={`Review · ${project.name}`} fullscreen>
   <Review
     client:only="svelte"
-    project={{ id: project.id, name: project.name, baseUrl: project.baseUrl, kind: project.kind }}
+    project={{ id: project.id, name: project.name, baseUrl: project.baseUrl, kind: project.kind, phoneView: project.phoneView }}
     user={{ id: user.id, name: user.name }}
     access={access}
     initialPath={initialPath}

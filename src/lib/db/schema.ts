@@ -21,6 +21,8 @@ export const projects = sqliteTable('projects', {
   kind: text('kind').notNull().default('url'),
   /** When the last upload of a 'static' project finished; null until then. */
   siteUploadedAt: text('site_uploaded_at'),
+  /** Offer the iPhone 15 viewport on the review screen; off for sites not built for phones. */
+  phoneView: integer('phone_view', { mode: 'boolean' }).notNull().default(true),
   createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
 });

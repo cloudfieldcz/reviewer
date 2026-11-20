@@ -183,7 +183,11 @@ offers back / forward / reload, and takes a typed path. The path is mirrored int
 an iPhone 15 shell — a real 393 × 852 px viewport, so the site's own media queries decide what it
 shows. The frame is never reloaded when switching, only resized, and the shell scales down to fit a
 short window (the page still believes it is 393 × 852). The choice is mirrored into the URL
-(`?device=…`) and remembered per browser.
+(`?device=…`) and remembered per browser. An admin can switch the phone view off per project (manage
+screen, *Phone view*) for a site that is not built for phones: the switch disappears, the screen is
+always the desktop one whatever the link or the remembered choice says, and the "N comments in the
+iPhone view" line is not shown. Comments already written on the phone are kept and stay in the
+manage table and the exports.
 
 **Comments are kept per viewport.** A phone layout is a different DOM: the navigation collapses into
 a burger, sections are reordered, elements disappear. A comment made on the phone would therefore
