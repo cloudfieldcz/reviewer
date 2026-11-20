@@ -49,6 +49,7 @@ docker compose up --build   # same thing in Docker, still without auth (see dock
 |---|---|---|
 | `DATABASE_PATH` | `./data/reviewer.db` (`/data/reviewer.db` in Docker) | SQLite file; parent dir is created |
 | `SITES_DIR` | `./data/sites` (`/data/sites` in Docker) | Uploaded sites, one folder per project id |
+| `DEFAULT_LOCALE` | `en` | Language of the review screen (`cs` or `en`) when the browser's `Accept-Language` names none of `cs`, `sk`, `en`. Only the review screen and the pages shown in its frame are translated |
 | `PUBLIC_ORIGIN` | derived from `X-Forwarded-Proto/Host` | Public origin of Reviewer, e.g. `https://reviewer.example.com`. Used for absolute links inside proxied pages – set it in production |
 | `ADMIN_EMAILS` | – | Comma-separated bootstrap admins (case-insensitive). Keep empty once app roles are assigned |
 | `DEFAULT_ROLE` | – | Role for signed-in users without an `ADMIN`/`USER` app role: `user`, or empty (→ 403). `admin` also works, for local dev only |
@@ -210,6 +211,7 @@ src/
   lib/projects.ts, comments.ts, replies.ts, export.ts, url.ts (SSRF guard)
   lib/proxy/               fetch.ts (undici, limits) · rewrite.ts (cheerio) · inject.ts · handler.ts
   lib/client/              anchor.ts (finder/xpath/text) · overlay.ts (outline, +, markers) · api.ts
+  lib/i18n/                review-screen dictionaries (en.ts keys, cs.ts) · t() · locale resolution
   components/Review.svelte the review screen island (toolbar, iframe wiring, sidebar)
   pages/                   index (projects) · review/[id] · projects/[id]/manage · admin/users · p/[id]/[...path] · api/*
 tests/                     vitest: proxy rewriting, auth, URL validation, project counts, access levels and owners,

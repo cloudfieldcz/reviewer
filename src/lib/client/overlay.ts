@@ -14,6 +14,14 @@ export interface MarkerSpec {
   status: 'open' | 'approved' | 'rejected';
 }
 
+/** Texts drawn into the page; the caller owns them, so the overlay never has to know the locale. */
+export interface OverlayLabels {
+  /** Title of the "+" button. */
+  plus: string;
+  /** Title of a marker. */
+  marker: (m: MarkerSpec) => string;
+}
+
 export interface Point {
   x: number;
   y: number;
@@ -92,6 +100,7 @@ export class Overlay {
   constructor(
     private doc: Document,
     private handlers: { onPlus: (el: Element) => void; onMarker: (id: number) => void },
+    private labels: OverlayLabels,
   ) {
     const style = doc.createElement('style');
     style.setAttribute('data-reviewer-ui', '');
@@ -103,7 +112,7 @@ export class Overlay {
     this.hoverBox = this.mk('rz-hover');
     this.plus = this.mk('rz-plus');
     this.plus.textContent = '+';
-    this.plus.title = 'Add a comment to this element';
+    this.plus.title = labels.plus;
     this.tag = this.mk('rz-tag');
     this.hideHover();
     this.root.append(this.hoverBox, this.tag, this.plus);
@@ -213,7 +222,7 @@ export class Overlay {
       }
       const mark = m.status === 'approved' ? '✓' : m.status === 'rejected' ? '✕' : String(m.number);
       nodes.dot.textContent = mark;
-      nodes.dot.title = m.status === 'open' ? `Comment #${m.number}` : `Comment #${m.number} – ${m.status}`;
+      nodes.dot.title = this.labels.marker(m);
       const mods = `${m.mine ? ' mine' : ''}${m.status === 'open' ? '' : ` ${m.status}`}${m.active ? ' active' : ''}`;
       nodes.dot.className = `rz-marker${mods}`;
       nodes.box.className = `rz-outline${mods}`;

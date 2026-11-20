@@ -175,6 +175,11 @@ the list — *● Open*, *✓ Approved*, *✕ Rejected*, each with its count —
 green ✓, rejected ones a red ✕, both muted. Replying to a decided comment stays possible — the
 verdict ends the work, not the conversation.
 
+**Language.** The review screen speaks Czech or English, chosen from the browser's language
+(Slovak gets Czech) with `DEFAULT_LOCALE` as the fallback; there is no switch. It is the only
+translated screen — the people who comment need it, the owners and admins who manage projects read
+English.
+
 **Navigation.** Links inside the frame stay inside the proxy. The toolbar shows the current path,
 offers back / forward / reload, and takes a typed path. The path is mirrored into the Reviewer URL
 (`?path=…`) so a specific page under review can be linked to or reloaded.

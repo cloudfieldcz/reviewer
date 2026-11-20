@@ -85,6 +85,7 @@ src/
   lib/url.ts             base-URL normalization, SSRF guard
   lib/proxy/             fetch.ts (limits) · rewrite.ts (cheerio) · inject.ts · handler.ts
   lib/client/            anchor.ts (selector/xpath/text) · overlay.ts (outline, +, markers) · api.ts
+  lib/i18n/              review-screen dictionaries (en.ts = keys, cs.ts) · t() · resolveLocale · server.ts (requestLocale)
   components/Review.svelte   the review screen
   pages/                 index · review/[id] · projects/[id]/manage · admin/users · p/[id]/[...path] · api/*
 ```
@@ -274,6 +275,25 @@ clicked element carries one of them with a value unique in the document, the com
 attributes are still allowed in finder's selectors, so an ancestor's anchor can appear in one. The meta is read once
 per frame document. Nothing in Reviewer knows a particular page's attribute names. This applies to proxied sites as
 well as uploaded ones.
+
+## Languages
+
+Reviewers comment, owners and admins manage – and they are not always the same audience. Only the
+**review screen** is translated (Czech and English); the project list, the manage page, the user
+overview, exports and the 401/403 texts stay English. The locale is resolved per request in
+`review/[id].astro` from `Accept-Language` (first supported language by quality; `cs` and `sk` map to
+`cs`), else `DEFAULT_LOCALE`, else `en` — no cookie, no switch. The page sets `<html lang>` and hands
+the locale to the island. The two pages rendered *inside* the review frame — "nothing uploaded yet"
+(`lib/sites.ts`) and the proxy error page (`lib/proxy/handler.ts`) — resolve it the same way from the
+frame request. The island detects the proxy error page by its `<meta name="reviewer-error">`, not by
+the (translated) title.
+
+`lib/i18n/` holds two dictionaries and a ~20-line `t(key, params)`: `en.ts` is the source of keys,
+`cs.ts` is typed against it (a missing key fails `npm run check`), `{name}` is interpolated and plurals
+go through `Intl.PluralRules` (1 komentář / 2–4 komentáře / 5+ komentářů). Dates use `Intl` with `cs-CZ`
+or `en-GB`. The overlay drawn into the page takes its titles from the island. The API stays English:
+the messages the review screen can hit are mapped to keys on the client (`API_ERRORS`), a bare status
+or a network failure gets a generic text, and anything else is shown with the server's text as detail.
 
 ## Element anchoring
 

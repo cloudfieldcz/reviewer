@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import * as cheerio from 'cheerio';
 import { env } from './env';
 import { HttpError } from './http';
+import { translator, type Locale } from './i18n';
 
 /** Upload limits for an uploaded-site project (a built SPA, not a media library). */
 export const MAX_SITE_FILES = 3000;
@@ -149,13 +150,18 @@ export function injectStaticHtml(html: string, projectId: number): string {
 
 const HEADERS = { 'cache-control': 'no-store', 'x-robots-tag': 'noindex' };
 
-const emptyPage = (): Response =>
-  new Response(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Reviewer – nothing uploaded</title>
+/** Shown inside the review frame, so it speaks the reviewer's language (the frame request's `Accept-Language`). */
+export function emptyPage(locale: Locale = 'en'): Response {
+  const t = translator(locale);
+  return new Response(
+    `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><title>${escapeText(t('frame.emptyTitle'))}</title>
 <style>body{font:15px/1.5 system-ui,sans-serif;margin:0;padding:3rem;color:#333;background:#fafafa}</style></head>
-<body><h1 style="font-size:1.25rem">Nothing has been uploaded yet</h1><p>An admin can upload the built site on the project's manage page.</p></body></html>`,
-    { status: 404, headers: { 'content-type': 'text/html; charset=utf-8', ...HEADERS } },
+<body><h1 style="font-size:1.25rem">${escapeText(t('frame.emptyHeading'))}</h1><p>${escapeText(t('frame.emptyBody'))}</p></body></html>`,
+    { status: 404, headers: { 'content-type': 'text/html; charset=utf-8', vary: 'accept-language', ...HEADERS } },
   );
+}
+
+const escapeText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 async function fileOrNull(p: string | null): Promise<string | null> {
   if (!p) return null;
@@ -164,11 +170,11 @@ async function fileOrNull(p: string | null): Promise<string | null> {
   return s?.isFile() ? p : null;
 }
 
-/** Serves `/p/{id}/{path}` of an uploaded site; `relPath` has no leading slash. */
-export async function serveSite(projectId: number, relPath: string): Promise<Response> {
+/** Serves `/p/{id}/{path}` of an uploaded site; `relPath` has no leading slash. `locale` only words the "nothing uploaded" page. */
+export async function serveSite(projectId: number, relPath: string, locale: Locale = 'en'): Promise<Response> {
   const dir = siteDir(projectId);
   const indexFile = join(dir, 'index.html');
-  if (!(await fileOrNull(indexFile))) return emptyPage();
+  if (!(await fileOrNull(indexFile))) return emptyPage(locale);
 
   let file = await fileOrNull(resolveInside(dir, relPath));
   if (!file) {

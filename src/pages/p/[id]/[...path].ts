@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { HttpError, idParam } from '~/lib/http';
 import { getProject } from '~/lib/projects';
+import { requestLocale } from '~/lib/i18n/server';
 import { proxyRequest } from '~/lib/proxy/handler';
 import { serveSite } from '~/lib/sites';
 
@@ -19,7 +20,7 @@ export const GET: APIRoute = async (ctx) => {
     if (ctx.url.pathname === `/p/${project.id}`) {
       return new Response(null, { status: 301, headers: { location: `/p/${project.id}/${ctx.url.search}` } });
     }
-    return serveSite(project.id, ctx.params.path ?? '');
+    return serveSite(project.id, ctx.params.path ?? '', requestLocale(ctx.request));
   }
   const pathAndQuery = '/' + (ctx.params.path ?? '') + ctx.url.search;
   return proxyRequest({ project, pathAndQuery, request: ctx.request });
