@@ -1117,14 +1117,14 @@
                 </div>
               </div>
             {:else if editing?.id !== c.id}
-              <div class="mt-2 flex items-center justify-between gap-1 text-xs">
+              <div class="mt-2 flex flex-wrap items-center justify-between gap-1 text-xs [&_button]:whitespace-nowrap">
                 <div class="flex gap-1">
                   <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startReply(c); }}>{t('action.reply')}</button>
                   {#if c.context?.state !== undefined}
                     <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); restoreState(c); }} title={t('action.restoreTitle')}>{t('action.restore')}</button>
                   {/if}
                 </div>
-                <div class="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                <div class="ml-auto flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                   {#if canManage}
                     {#if decided}
                       <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); decide(c, 'open'); }}>{t('action.reopen')}</button>
