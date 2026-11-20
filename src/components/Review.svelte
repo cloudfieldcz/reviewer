@@ -38,7 +38,8 @@
   let comments = $state<CommentDto[]>([]);
   let resolved = $state<Record<number, { method: ResolveMethod } | null>>({});
   let filter = $state<'all' | 'mine'>('all');
-  let commentMode = $state(true);
+  /** Browse is the default: the page behaves normally until the reviewer asks to comment (button or C). */
+  let commentMode = $state(false);
   /** ⌥ held: clicks fall through to the page, so the mode indicator has to say so too. */
   let altActive = $state(false);
   let hintOpen = $state(true);
@@ -738,15 +739,6 @@
     <!-- Mode: both options are always on screen, so the label can never be read as an action. -->
     <div class="chrome-seg" role="group" aria-label="Interaction mode">
       <button
-        class={['chrome-seg-item', commentMode && 'bg-brand text-white hover:text-white']}
-        onclick={() => setMode(true)}
-        aria-pressed={commentMode}
-        title="Comment mode (C) – clicking an element writes a comment"
-      >
-        {@render iconComment('h-3.5 w-3.5')}
-        Comment
-      </button>
-      <button
         class={['chrome-seg-item', !commentMode && 'bg-white text-gray-900 hover:text-gray-900']}
         onclick={() => setMode(false)}
         aria-pressed={!commentMode}
@@ -754,6 +746,15 @@
       >
         {@render iconCursor('h-3.5 w-3.5')}
         Browse
+      </button>
+      <button
+        class={['chrome-seg-item', commentMode && 'bg-brand text-white hover:text-white']}
+        onclick={() => setMode(true)}
+        aria-pressed={commentMode}
+        title="Comment mode (C) – clicking an element writes a comment"
+      >
+        {@render iconComment('h-3.5 w-3.5')}
+        Comment
       </button>
     </div>
 
@@ -828,8 +829,16 @@
         <div class="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/40 p-6">
           <div class="w-full max-w-md rounded-xl bg-white p-6 shadow-pop">
             <h2 class="text-lg font-semibold tracking-tight">Two ways to click</h2>
-            <p class="mt-1 text-sm text-gray-600">The site below is live. The mode decides what your clicks do.</p>
+            <p class="mt-1 text-sm text-gray-600">The site below is live. You start in Browse mode; the mode decides what your clicks do.</p>
             <ul class="mt-5 space-y-3">
+              <li class="flex gap-3 rounded-lg border border-gray-200 p-3">
+                <span class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gray-200 text-gray-700">
+                  {@render iconCursor('h-4 w-4')}
+                </span>
+                <span class="text-sm">
+                  <span class="font-semibold">Browse</span> – the site behaves normally, so you can navigate to the page you want to review. Existing comments stay visible.
+                </span>
+              </li>
               <li class="flex gap-3 rounded-lg border border-brand/30 bg-brand-soft p-3">
                 <span class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand text-white">
                   {@render iconComment('h-4 w-4')}
@@ -839,17 +848,9 @@
                   <kbd class="rounded border border-gray-300 bg-white px-1 font-mono text-[11px]">⌥</kbd> to click through to the page once (cookie banners, menus).
                 </span>
               </li>
-              <li class="flex gap-3 rounded-lg border border-gray-200 p-3">
-                <span class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gray-200 text-gray-700">
-                  {@render iconCursor('h-4 w-4')}
-                </span>
-                <span class="text-sm">
-                  <span class="font-semibold">Browse</span> – the site behaves normally, so you can navigate to the page you want to review. Existing comments stay visible.
-                </span>
-              </li>
             </ul>
             <p class="mt-4 text-xs text-gray-500">
-              Switch any time with the toggle up top or the <kbd class="rounded border border-gray-300 bg-gray-50 px-1 font-mono text-[11px]">C</kbd> key.
+              Switch with the toggle up top or the <kbd class="rounded border border-gray-300 bg-gray-50 px-1 font-mono text-[11px]">C</kbd> key.
             </p>
             <div class="mt-5 flex items-center justify-between gap-3 border-t border-gray-100 pt-4">
               <label class="flex cursor-pointer items-center gap-2 text-xs text-gray-600 select-none">
@@ -957,7 +958,7 @@
               {#if commentMode}
                 Click anything in the page to write the first one.
               {:else}
-                Switch to Comment mode to add one.
+                Switch to Comment mode (C), then click an element to add one.
               {/if}
             </p>
           </div>

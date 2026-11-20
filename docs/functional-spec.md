@@ -79,12 +79,13 @@ Deliberate choices here:
 ### User
 
 1. Sign in (Entra ID, no separate account) → the project list.
-2. Pick a project → the review screen opens on the project's home page, with a card explaining the
-   two modes. The card returns on every visit until the reviewer ticks *Got it, don't show this
+2. Pick a project → the review screen opens on the project's home page in browse mode, with a card
+   explaining the two modes. The card returns on every visit until the reviewer ticks *Got it, don't show this
    again*; the **?** button in the toolbar brings it back (unticking the box makes it return again).
-3. Hover an element; it gets an outline and a `+` button. Click it, type the comment, save.
-4. Switch to browse mode, navigate to another page, switch back and keep commenting.
-5. Own comments can be edited or deleted from the sidebar while they are still open. A rejected
+3. Navigate to the page to review, switch to comment mode (**C** or the toolbar switch).
+4. Hover an element; it gets an outline and a `+` button. Click it, type the comment, save.
+5. Switch back to browse mode, navigate to another page, switch again and keep commenting.
+6. Own comments can be edited or deleted from the sidebar while they are still open. A rejected
    comment turns up under *Mine* with the *Rejected* chip lit, usually with a reply saying why.
 
 ### Owner
@@ -116,7 +117,7 @@ and orphaned comments about a site nobody reviews any more are noise.
 
 ```
 ┌──────────────────────────────────────────────┬──────────────┐
-│ [◱] name  ‹ › ↻  /contact  ↗  [Comment|Browse]│  Comments    │
+│ [◱] name  ‹ › ↻  /contact  ↗  [Browse|Comment]│  Comments    │
 ├──────────────────────────────────────────────┤  All | Mine  │
 │                                              │              │
 │   <iframe src="/p/{id}/contact">             │  ① Heading…  │
@@ -134,8 +135,9 @@ person fixing the site. The highlight is an overlay element, never a change to t
 styling, so the site still looks the way it really looks.
 
 **Comment mode blocks navigation.** Without that, a link could not be commented on — the click would
-follow it. Browse mode turns clicks back on for getting around the site. Comment mode is on by
-default, because commenting is the reason people are there. Holding **⌥ (Alt)** sends a single click
+follow it. Browse mode turns clicks back on for getting around the site. Browse mode is on by
+default: reviewers usually first walk to the page they mean, and a page that swallows every click
+on arrival reads as broken. Holding **⌥ (Alt)** sends a single click
 to the page instead of creating a comment — enough to accept a cookie banner or open a menu without
 leaving comment mode; the hover highlight hides while the key is down.
 
