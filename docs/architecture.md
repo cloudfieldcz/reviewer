@@ -293,6 +293,19 @@ the DOM changed, which is why the text check comes first.
 Resolution is retried a few times after load for pages that render late. Anything that still fails
 to resolve keeps its comment in the sidebar, flagged *element not found*.
 
+### Markers under page layers
+
+The overlay container sits at `z-index: 2147483000`, so without a check a marker would float over a
+dialog, drawer, menu or sticky header the page opens above its element. `layoutMarkers()` therefore
+hit-tests each element at five points of its on-screen rect — the centre and four points inset 25 %
+from the corners — with `elementsFromPoint`, skipping Reviewer's own nodes, and hides marker and
+outline when every point is topped by something that is neither the element, inside it, nor around
+it (an ancestor on top means the element is `pointer-events: none` there, not covered). A covered
+marker takes no slot in the anti-overlap stacking. An element with no on-screen part is never hidden
+on that basis. Re-layout runs on DOM mutations (the body subtree plus attributes of `<html>`, where
+some pages flag an open dialog), scroll, resize and `transitionend` / `animationend`, so a dialog that
+closes with a fade is re-tested once the fade ends.
+
 ### Viewport is part of the comment's identity
 
 Responsive sites render a different DOM at phone width — collapsed navigation, reordered or dropped
@@ -414,4 +427,7 @@ access level, `managedProjects` and `setOwners` (`tests/access.test.ts`); and th
 key-presence dispatch, driven through the real handler (`tests/comment-patch.test.ts`).
 
 The DOM-dependent parts — anchoring and the overlay — are verified by driving a real browser against
-the running app.
+the running app. The overlay's occlusion test is split so its logic runs in node: `samplePoints()`
+(where to hit-test an element, clipped to the viewport) and `isCovered()` (how the per-point answers
+combine) are pure and covered in `tests/overlay.test.ts`; only the `elementsFromPoint` call needs the
+browser.

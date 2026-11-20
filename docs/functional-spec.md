@@ -149,8 +149,10 @@ every switch, and while ⌥ is held). **C** toggles the mode from anywhere, incl
 
 **Markers.** Every comment whose element was found gets a numbered circle next to it. Numbers follow
 the element's position on the page, not the order comments were written, so they read top to bottom
-like the page does. Markers reposition on scroll, resize and DOM changes. Clicking a marker
-highlights the sidebar entry and vice versa.
+like the page does. Markers reposition on scroll, resize and DOM changes. A marker whose element is
+covered by something the page draws on top of it — a dialog, a drawer, a menu, a sticky header —
+hides with its outline until the element is visible again. Clicking a marker highlights the sidebar
+entry and vice versa.
 
 **Sidebar.** Filter *All / Mine*, own comments visually distinct from other people's, edit and
 delete on own open entries only, author and timestamp on each. Comments whose element cannot be
