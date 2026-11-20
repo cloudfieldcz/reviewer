@@ -119,6 +119,10 @@ export const cs: Messages = {
   'card.decidedBySomeone': 'neznámo kým',
   'card.notFound': 'Prvek nenalezen',
   'card.notFoundTitle': 'Prvek, ke kterému komentář patří, už na stránce není (změnil se web?). Komentář zůstává.',
+  'card.inLayer': 'V dialogu „{name}“',
+  'card.inLayerUnnamed': 'V dialogu',
+  'card.openLayer': 'Otevřít dialog',
+  'card.openLayerTitle': 'Klikne na to, čím se dialog otevřel, když komentář vznikal',
   'card.byText': 'Nalezeno podle textu',
   'card.byTextTitle': 'Nalezeno podle textu – struktura stránky se od napsání komentáře změnila.',
   'reply.placeholder': 'Odpověď…',
@@ -134,6 +138,8 @@ export const cs: Messages = {
   'overlay.markerDecided': 'Komentář č. {number} – {status}',
 
   // ---- errors ----
+  'error.reopen': 'Dialog se nepodařilo otevřít: to, čím se otevíral, teď na stránce není.',
+  'error.reopenTarget': 'Dialog je otevřený, ale komentovaný prvek v něm není.',
   'error.restore': 'Tato stránka neumí uložený stav obnovit.',
   'error.network': 'Reviewer je nedostupný – zkontrolujte připojení a zkuste to znovu.',
   'error.http': 'Požadavek se nepovedl (HTTP {status}).',

@@ -148,6 +148,13 @@ describe('export of the page context', () => {
     expect(toMarkdown(project, [withCtx])).toContain('_[Kácení · krok 3]_');
   });
 
+  it('names the dialog a comment was written in', () => {
+    const inDialog = comment({ context: { label: 'Kácení · krok 1', layer: { name: 'Spustit analýzu', openers: [] } } });
+    expect(toMarkdown(project, [inDialog])).toContain('_[Kácení · krok 1 · in dialog “Spustit analýzu”]_');
+    const csv = exportComments(project, [comment({ context: { layer: { openers: [] } } })], 'csv').body;
+    expect(csv).toContain('in a dialog');
+  });
+
   it('keeps the whole context object in JSON', () => {
     const json = JSON.parse(exportComments(project, [withCtx], 'json').body);
     expect(json.comments[0].context).toEqual({ label: 'Kácení · krok 3', state: { step: 3 } });

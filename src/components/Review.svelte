@@ -2,6 +2,7 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import { computeAnchor, isReviewerNode, pickMeaningful, resolveAnchor, type Anchor, type ResolveMethod } from '~/lib/client/anchor';
   import { api, type CommentDto, type CommentStatus, type ProjectAccess, type ReplyDto, type Viewport } from '~/lib/client/api';
+  import { layerName, layerOf, openLayers, openersOf, TRAIL_LENGTH, type OpenerAnchor, type TrailClick } from '~/lib/client/layers';
   import { Overlay } from '~/lib/client/overlay';
   import { DATE_LOCALE, errorText, translator, type Locale } from '~/lib/i18n';
 
@@ -58,7 +59,8 @@
   let introMute = $state(false);
   // #c123 in the URL (links from the admin table) focuses that comment once loaded.
   let activeId = $state<number | null>(Number(location.hash.match(/^#c(\d+)$/)?.[1]) || null);
-  let draft = $state<{ anchor: Anchor; body: string; saving: boolean } | null>(null);
+  /** `layer`: the dialog the element sits in and the clicks that opened it – see lib/client/layers.ts. */
+  let draft = $state<{ anchor: Anchor; body: string; saving: boolean; layer: { name?: string; openers: OpenerAnchor[] } | null } | null>(null);
   let editing = $state<{ id: number; body: string; saving: boolean } | null>(null);
   let replying = $state<{ commentId: number; body: string; saving: boolean } | null>(null);
   let editingReply = $state<{ id: number; commentId: number; body: string; saving: boolean } | null>(null);
@@ -88,6 +90,11 @@
   let overlay: Overlay | null = null;
   let draftEl: Element | null = null;
   let elements = new Map<number, Element>();
+  /** Clicks that reached the page since the frame loaded – where a dialog's opener is looked up. */
+  let trail: TrailClick[] = [];
+  /** Set while the review screen clicks an opener itself, so Comment mode lets that click through. */
+  let replaying = false;
+  let reopening = false;
   let detachFrame: (() => void) | null = null;
   let sidebarEl = $state<HTMLElement | null>(null);
   let hintTimer: ReturnType<typeof setTimeout> | undefined;
@@ -211,6 +218,7 @@
     draft = null;
     draftEl = null;
     elements = new Map();
+    trail = [];
 
     overlay = new Overlay(
       doc,
@@ -238,8 +246,23 @@
       if (el) overlay?.setHover(el); // over bare body/html: keep the last highlight so "+" stays reachable
     };
     const onLeave = () => overlay?.setHover(null);
+    /** Remembers a click that reaches the page, so a dialog it opens can be opened again later. */
+    const record = (e: MouseEvent) => {
+      const target = e.target as Element | null;
+      if (!target || isReviewerNode(target)) return;
+      const el = target.closest('button, a[href], [role="button"], [role="tab"], [role="menuitem"], summary, label, input') ?? pickMeaningful(target);
+      if (!el) return;
+      try {
+        const { selector, xpath, textSnippet, tagName } = computeAnchor(el, doc);
+        trail.push({ anchor: { selector, xpath, textSnippet, tagName }, layer: layerOf(el), open: openLayers(doc) });
+        if (trail.length > TRAIL_LENGTH) trail.shift();
+      } catch {
+        /* an element that cannot be anchored simply cannot be replayed */
+      }
+    };
     const onClick = (e: MouseEvent) => {
-      if (!commentMode) return;
+      if (!commentMode || e.altKey || replaying) record(e);
+      if (!commentMode || replaying) return;
       altActive = e.altKey;
       if (e.altKey) return; // ⌥-click drives the page itself: cookie banners, menus, tabs
       if (isReviewerNode(e.target as Element)) return; // our own buttons
@@ -252,7 +275,7 @@
     };
     const swallow = (e: Event) => {
       // `submit` carries no modifier state – reuse the one from the click that triggered it.
-      if (commentMode && !altActive && !isReviewerNode(e.target as Element)) {
+      if (commentMode && !altActive && !replaying && !isReviewerNode(e.target as Element)) {
         e.preventDefault();
         e.stopPropagation();
       }
@@ -267,6 +290,15 @@
     };
     const onKeyUp = (e: KeyboardEvent) => (altActive = e.altKey);
     const onBlur = () => (altActive = false);
+    // Dialogs, tabs and other client-side changes add and remove commented elements without a
+    // navigation; re-anchor once the page settles, so cards and markers follow what is on screen.
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+    const pageChanges = new win.MutationObserver((records) => {
+      if (records.every((r) => isReviewerNode(r.target as Element))) return;
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(refreshAnchors, 250);
+    });
+    pageChanges.observe(doc.body, { childList: true, subtree: true });
     // Window-level capture listeners fire before the page's own (and the injected script's) document listeners.
     win.addEventListener('mousemove', onMove, true);
     win.addEventListener('click', onClick, true);
@@ -285,6 +317,8 @@
       win.removeEventListener('keyup', onKeyUp, true);
       win.removeEventListener('blur', onBlur);
       doc.removeEventListener('mouseleave', onLeave);
+      pageChanges.disconnect();
+      clearTimeout(settleTimer);
       overlay?.destroy();
       overlay = null;
       detachFrame = null;
@@ -390,8 +424,17 @@
       next[c.id] = r ? { method: r.method } : null;
       if (r) elements.set(c.id, r.el);
     }
-    resolved = next;
+    // Assign only on a change: this runs after every settled page change and must not re-render idle cards.
+    const same =
+      Object.keys(next).length === Object.keys(resolved).length &&
+      Object.entries(next).every(([id, r]) => resolved[Number(id)]?.method === r?.method);
+    if (!same) resolved = next;
     paintMarkers();
+  }
+
+  /** After a page change: re-anchor when a commented element came or went. */
+  function refreshAnchors() {
+    if (forDevice.some((c) => !elements.get(c.id)?.isConnected)) resolveAll();
   }
 
   function paintMarkers() {
@@ -434,10 +477,58 @@
 
   function focusComment(id: number, opts: { scrollFrame?: boolean; scrollSidebar?: boolean } = {}) {
     activeId = id;
-    const el = elements.get(id);
+    const el = elements.get(id)?.isConnected ? elements.get(id) : undefined;
+    // Written inside a dialog that is closed now: open it again the way it was opened.
+    if (opts.scrollFrame && !el) {
+      const c = comments.find((x) => x.id === id);
+      if (c?.context?.layer?.openers.length) void reopenLayer(c);
+    }
     if (opts.scrollFrame && el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     if (opts.scrollSidebar) {
       tick().then(() => sidebarEl?.querySelector<HTMLElement>(`[data-cid="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    }
+  }
+
+  /** Resolves an anchor in the current frame document, retrying while a client-side page renders. */
+  async function waitForAnchor(a: OpenerAnchor, doc: Document, ms: number): Promise<Element | null> {
+    const until = Date.now() + ms;
+    for (;;) {
+      if (iframe?.contentWindow?.document !== doc) return null; // the frame navigated away
+      const r = resolveAnchor(doc, a);
+      if (r) return r.el;
+      if (Date.now() > until) return null;
+      await new Promise((done) => setTimeout(done, 150));
+    }
+  }
+
+  /** Clicks the comment's dialog openers in order, then points at the commented element inside. */
+  async function reopenLayer(c: CommentDto) {
+    const openers = c.context?.layer?.openers ?? [];
+    const doc = iframe?.contentWindow?.document;
+    if (reopening || !doc || !openers.length) return;
+    reopening = true;
+    error = null;
+    try {
+      for (const opener of openers) {
+        const el = await waitForAnchor(opener, doc, 5000);
+        if (!el) {
+          error = t('error.reopen');
+          return;
+        }
+        replaying = true;
+        try {
+          (el as HTMLElement).click();
+        } finally {
+          replaying = false;
+        }
+      }
+      const target = await waitForAnchor(c, doc, 3000);
+      resolveAll();
+      activeId = c.id;
+      if (target) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      else error = t('error.reopenTarget');
+    } finally {
+      reopening = false;
     }
   }
 
@@ -446,7 +537,13 @@
     if (!doc) return;
     draftEl = el;
     overlay?.setHover(el);
-    draft = { anchor: computeAnchor(el, doc), body: '', saving: false };
+    const layer = layerOf(el);
+    draft = {
+      anchor: computeAnchor(el, doc),
+      body: '',
+      saving: false,
+      layer: layer ? { name: layerName(layer) || undefined, openers: openersOf(trail, layer) } : null,
+    };
     editing = null;
     activeId = null;
     await tick();
@@ -469,6 +566,10 @@
         context = (iframe?.contentWindow as PrototypeWindow | null | undefined)?.reviewerContext?.() ?? undefined;
       } catch {
         context = undefined; // a broken hook must never block the comment
+      }
+      if (draft.layer) {
+        const own = context && typeof context === 'object' && !Array.isArray(context) ? (context as Record<string, unknown>) : {};
+        context = { ...own, layer: draft.layer };
       }
       const created = await api.createComment(project.id, path, device, draft.body, draft.anchor, context);
       comments = [...comments, created];
@@ -1034,7 +1135,19 @@
               <p class="mb-2 text-[11px] leading-4 text-gray-500">{c.context.label}</p>
             {/if}
 
-            {#if !found}
+            {#if c.context?.layer}
+              <p class="mb-2 text-[11px] leading-4 text-gray-500">{c.context.layer.name ? t('card.inLayer', { name: c.context.layer.name }) : t('card.inLayerUnnamed')}</p>
+            {/if}
+
+            {#if !found && c.context?.layer?.openers.length}
+              <button
+                class="mb-2 inline-flex items-center gap-1 rounded bg-brand/10 px-1.5 py-0.5 text-[11px] font-medium text-brand hover:bg-brand/20"
+                title={t('card.openLayerTitle')}
+                onclick={(e) => { e.stopPropagation(); activeId = c.id; void reopenLayer(c); }}
+              >
+                {t('card.openLayer')}
+              </button>
+            {:else if !found}
               <p class="mb-2 inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800" title={t('card.notFoundTitle')}>
                 {t('card.notFound')}
               </p>

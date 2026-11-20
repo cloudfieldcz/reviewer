@@ -334,6 +334,28 @@ on that basis. Re-layout runs on DOM mutations (the body subtree plus attributes
 some pages flag an open dialog), scroll, resize and `transitionend` / `animationend`, so a dialog that
 closes with a fade is re-tested once the fade ends.
 
+### Comments inside dialogs
+
+A comment written on an element inside a dialog cannot be shown once the dialog is closed, and
+nothing on the page says which dialog it was. `lib/client/layers.ts` handles this generically, from
+standard markup only (`dialog[open]`, `role="dialog"` / `"alertdialog"`, `aria-modal="true"`):
+
+- Every click that reaches the page (Browse mode, ⌥-click, or a replay) is kept in a short trail
+  (last 40) with the element's anchors, the dialog it sat in and the dialogs already open.
+- On a new comment inside a dialog, the review screen stores `context.layer` = the dialog's
+  accessible name (`aria-label`, `aria-labelledby`, first heading) and its *openers*: the last click
+  made while that dialog was not yet open, preceded by the opener of the dialog that click sat in
+  (up to three levels). An incomplete chain is stored empty.
+- The card says "In the dialog “…”". When the element is not on the page, the card offers *Open the
+  dialog*; it and a card click resolve each opener and click it (Comment mode lets these clicks
+  through), then point at the element. The `?comment=` deep link and *Restore state* end in the same
+  path after the reload. Exports append the dialog to the place label.
+- Re-anchoring follows client-side changes: a body `MutationObserver` (debounced 250 ms) re-resolves
+  when a commented element came or went, so cards and markers track a dialog opening and closing.
+
+Only the opening is replayed, not choices made inside the dialog before the comment. A dialog opened
+by something other than a click (a timer, a keyboard shortcut that is not a click) has no opener.
+
 ### Viewport is part of the comment's identity
 
 Responsive sites render a different DOM at phone width — collapsed navigation, reordered or dropped

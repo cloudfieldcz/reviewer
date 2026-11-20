@@ -60,7 +60,7 @@ export function exportComments(
             text_snippet: c.textSnippet ?? '',
             selector: c.selector ?? '',
             body: c.body,
-            context: c.context?.label ?? '',
+            context: placeOf(c),
             status: c.status,
             status_at: c.statusAt ?? '',
             status_by: who(c.statusBy),
@@ -130,7 +130,7 @@ export function toMarkdown(project: Project, comments: CommentDto[], scope?: Exp
     for (const c of list) {
       const el = c.tagName ? `\`<${c.tagName}>\`` : '';
       const view = c.viewport === 'phone' ? ' _(iPhone 15)_' : '';
-      const place = c.context?.label ? ` _[${c.context.label.replace(/\s+/g, ' ')}]_` : '';
+      const place = placeOf(c) ? ` _[${placeOf(c)}]_` : '';
       const snippet = c.textSnippet ? ` “${truncate(c.textSnippet, 60)}”` : '';
       const body = c.body.replace(/\r?\n/g, '\n  ');
       const verdict =
@@ -145,6 +145,14 @@ export function toMarkdown(project: Project, comments: CommentDto[], scope?: Exp
     lines.push('');
   }
   return lines.join('\n');
+}
+
+/** Where the comment was written: the page's own label, then the dialog it sat in. */
+function placeOf(c: CommentDto): string {
+  const label = c.context?.label?.replace(/\s+/g, ' ') ?? '';
+  const layer = c.context?.layer;
+  const dialog = layer ? (layer.name ? `in dialog “${layer.name}”` : 'in a dialog') : '';
+  return [label, dialog].filter(Boolean).join(' · ');
 }
 
 function truncate(s: string, n: number): string {

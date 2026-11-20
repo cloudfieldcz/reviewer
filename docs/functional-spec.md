@@ -154,6 +154,11 @@ covered by something the page draws on top of it — a dialog, a drawer, a menu,
 hides with its outline until the element is visible again. Clicking a marker highlights the sidebar
 entry and vice versa.
 
+**Comments inside dialogs.** A comment written inside a dialog says so on its card ("In the dialog
+“Start analysis”"). Once the dialog is closed, the card offers *Open the dialog*: Reviewer clicks
+again what opened the dialog when the comment was written, and points at the element. Clicking the
+card or opening the comment's link does the same.
+
 **Sidebar.** Filter *All / Mine*, own comments visually distinct from other people's, edit and
 delete on own open entries only, author and timestamp on each. Comments whose element cannot be
 found are listed with an **element not found** flag.

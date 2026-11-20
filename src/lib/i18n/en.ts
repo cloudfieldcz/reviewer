@@ -110,6 +110,10 @@ export const en = {
   'card.decidedBySomeone': 'someone',
   'card.notFound': 'Element not found',
   'card.notFoundTitle': 'The element this comment was anchored to is no longer on the page (site changed?). The comment is kept.',
+  'card.inLayer': 'In the dialog “{name}”',
+  'card.inLayerUnnamed': 'In a dialog',
+  'card.openLayer': 'Open the dialog',
+  'card.openLayerTitle': 'Clicks what opened the dialog when the comment was written',
   'card.byText': 'Matched by text',
   'card.byTextTitle': 'Matched by text content – the page structure changed since the comment was made.',
   'reply.placeholder': 'Reply…',
@@ -126,6 +130,8 @@ export const en = {
   'overlay.markerDecided': 'Comment #{number} – {status}',
 
   // ---- errors shown in the error bar ----
+  'error.reopen': 'The dialog could not be opened: what opened it is not on this page now.',
+  'error.reopenTarget': 'The dialog is open, but the commented element is not in it.',
   'error.restore': 'This page cannot restore the saved state.',
   'error.network': 'Reviewer could not be reached – check the connection and try again.',
   'error.http': 'The request failed (HTTP {status}).',
