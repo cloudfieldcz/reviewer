@@ -264,8 +264,16 @@ routes itself. No probe, SSRF guard or fetch happens for these projects.
 **Page context.** A page may define `window.reviewerContext()` → `{label?, state?}`; the review screen sends it as
 `context` with every new comment (`comments.context`, JSON, `state` dropped above 256 KB). A card with a `state`
 offers *Restore state*: the island calls `window.reviewerRestore(state)` and, when it returns truthy, reloads the
-frame at the comment's path. `?comment=<id>` on the review URL does the same on first load. An element carrying
-`data-poc-anchor="…"` is anchored by that attribute in preference to any derived selector.
+frame at the comment's path. `?comment=<id>` on the review URL does the same on first load.
+
+**Stable anchors.** A page can name its own anchor attributes with
+`<meta name="reviewer-anchors" content="data-poc-anchor data-foo">` (spaces or commas; only `data-[a-z0-9-]+` names
+count, the rest is ignored). Reviewer's own `data-review-anchor` is always on, after the declared ones. When the
+clicked element carries one of them with a value unique in the document, the comment is anchored by
+`[attr="value"]` directly (first attribute in that order wins), in preference to any derived selector; otherwise the
+attributes are still allowed in finder's selectors, so an ancestor's anchor can appear in one. The meta is read once
+per frame document. Nothing in Reviewer knows a particular page's attribute names. This applies to proxied sites as
+well as uploaded ones.
 
 ## Element anchoring
 

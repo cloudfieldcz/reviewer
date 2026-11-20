@@ -73,30 +73,67 @@ export function xpathOf(el: Element): string {
   return '/html/' + parts.join('/');
 }
 
-/** Explicit anchor a prototype puts on an element it wants commentable, e.g. `data-poc-anchor="finding:f1"`. */
-export const POC_ANCHOR_ATTR = 'data-poc-anchor';
+/** Reviewer's own stable-anchor attribute: always honoured, after any the page declares. */
+export const REVIEW_ANCHOR_ATTR = 'data-review-anchor';
+/** `<meta name="reviewer-anchors" content="data-foo data-bar">` – the page's own stable-anchor attributes. */
+export const ANCHORS_META = 'reviewer-anchors';
+const ANCHOR_ATTR_NAME = /^data-[a-z0-9-]+$/;
 
-/** `[data-poc-anchor="…"]` when the element carries one and it is unique in the document – beats anything finder would derive. */
-function pocAnchorSelector(el: Element, doc: Document): string | null {
-  const value = el.getAttribute(POC_ANCHOR_ATTR);
-  if (!value) return null;
-  const sel = `[${POC_ANCHOR_ATTR}="${CSS.escape(value)}"]`;
-  try {
-    return doc.querySelectorAll(sel).length === 1 ? sel : null;
-  } catch {
-    return null;
+/**
+ * Stable-anchor attributes in priority order: the names the page declares in its `reviewer-anchors`
+ * meta (separated by spaces or commas; anything but `data-[a-z0-9-]+` is ignored, duplicates keep their
+ * first place), then `data-review-anchor`. HTML attribute names are case-insensitive, so names are
+ * lower-cased before they are checked.
+ */
+export function parseAnchorAttrs(content: string | null | undefined): string[] {
+  const names = (content ?? '')
+    .split(/[\s,]+/)
+    .map((n) => n.toLowerCase())
+    .filter((n) => ANCHOR_ATTR_NAME.test(n));
+  return [...new Set([...names, REVIEW_ANCHOR_ATTR])];
+}
+
+// The meta is static, so it is read once per frame document; a new page load is a new Document.
+const attrsByDoc = new WeakMap<Document, string[]>();
+function anchorAttrs(doc: Document): string[] {
+  let attrs = attrsByDoc.get(doc);
+  if (!attrs) {
+    attrs = parseAnchorAttrs(doc.querySelector(`meta[name="${ANCHORS_META}"]`)?.getAttribute('content'));
+    attrsByDoc.set(doc, attrs);
   }
+  return attrs;
+}
+
+/**
+ * `[attr="value"]` for the first stable-anchor attribute the element carries with a value unique in the
+ * document – an explicit anchor beats anything finder would derive (finder ranks attributes below ids
+ * and classes).
+ */
+function stableAnchorSelector(el: Element, doc: Document, attrs: string[]): string | null {
+  for (const attr of attrs) {
+    const value = el.getAttribute(attr);
+    if (!value) continue;
+    const sel = `[${attr}="${CSS.escape(value)}"]`;
+    try {
+      if (doc.querySelectorAll(sel).length === 1) return sel;
+    } catch {
+      /* not a valid selector – try the next attribute */
+    }
+  }
+  return null;
 }
 
 export function computeAnchor(el: Element, doc: Document): Anchor {
-  let selector: string | null = pocAnchorSelector(el, doc);
+  const attrs = anchorAttrs(doc);
+  let selector: string | null = stableAnchorSelector(el, doc, attrs);
   try {
     if (!selector) selector = finder(el, {
       root: doc.body,
       // Ignore our own overlay nodes and volatile framework classes/ids.
       className: (n) => defaultClassName(n) && !/^(svelte-|astro-|css-|sc-|_)|[0-9a-f]{6,}/i.test(n),
       idName: (n) => defaultIdName(n) && !/[0-9a-f]{8,}|^(radix|headlessui|react-aria)/i.test(n),
-      attr: (name, value) => name === POC_ANCHOR_ATTR || ((name === 'data-testid' || name === 'name' || name === 'aria-label') && defaultAttr(name, value)),
+      // An ancestor's stable anchor may appear in a derived selector.
+      attr: (name, value) => attrs.includes(name) || ((name === 'data-testid' || name === 'name' || name === 'aria-label') && defaultAttr(name, value)),
       seedMinLength: 2,
       optimizedMinLength: 2,
       timeoutMs: 300,

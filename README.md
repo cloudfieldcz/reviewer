@@ -156,6 +156,16 @@ When a comment is saved, the app stores: a short unique CSS selector (`@medv/fin
 
 Resolution order when a page loads: selector hit whose text still matches → XPath hit whose text matches → any element of the same tag with the same text (shown as *matched by text*) → unique selector hit with changed text (the element was probably edited in response to the comment). A positional XPath alone is never trusted. Anchoring is retried a few times after load for pages that render late. If nothing matches, the comment stays in the sidebar flagged *element not found*.
 
+### Stable anchors
+
+A site you control can make anchors immune to layout changes. Put `data-review-anchor="…"` on the elements people comment on, or declare your own attribute names in the page head:
+
+```html
+<meta name="reviewer-anchors" content="data-poc-anchor data-foo">
+```
+
+Names are separated by spaces or commas; only `data-…` names (lower-case letters, digits, dashes) count. `data-review-anchor` is always honoured after the declared ones. An element carrying one of these attributes with a value unique on the page is anchored by `[attr="value"]` instead of a derived selector.
+
 ## API
 
 All under `/api`, JSON, identity from the middleware.
