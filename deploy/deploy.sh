@@ -52,6 +52,9 @@ elif [ -n "$build_ref" ]; then
   sed -i "s/^REVIEWER_TAG=.*/REVIEWER_TAG=$tag/" .env
   grep -q '^REVIEWER_TAG=' .env || echo "REVIEWER_TAG=$tag" >> .env
   docker compose pull --quiet traefik redis oauth2-reviewer
+elif grep -q '^REVIEWER_TAG=local-' .env; then
+  # A `local-…` tag was loaded onto this host (LOCAL_IMAGE or `docker load`); no registry has it.
+  docker compose pull --quiet traefik redis oauth2-reviewer
 else
   docker compose pull --quiet
 fi
