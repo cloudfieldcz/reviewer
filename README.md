@@ -100,6 +100,8 @@ deploy/azure/invite-guest.sh someone@partner.example   # B2B guest (or a tenant 
   `BUILD_REF=<branch|tag|commit>` builds the image on the host from the public repository instead of
   pulling a release – for a branch without a published image. That build goes straight to
   `registry.npmjs.org`, not through the Shieldoo Gate.
+  `LOCAL_IMAGE=<image>` ships an image built on your machine over SSH instead (`docker save` →
+  `docker load`), so a build made through the gate reaches the host without a registry.
 - `backup.sh` saves the `reviewer-data` volume (database + uploaded sites) to a local `tar.gz`;
   `backup.sh restore <file>` puts it back. Moving to another host = deploy there, restore, repoint DNS.
 
