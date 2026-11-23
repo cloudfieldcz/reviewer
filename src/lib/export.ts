@@ -60,6 +60,7 @@ export function exportComments(
             text_snippet: c.textSnippet ?? '',
             selector: c.selector ?? '',
             body: c.body,
+            context: placeOf(c),
             status: c.status,
             status_at: c.statusAt ?? '',
             status_by: who(c.statusBy),
@@ -122,19 +123,21 @@ export function toMarkdown(project: Project, comments: CommentDto[], scope?: Exp
     list.push(c);
     byPage.set(c.pagePath, list);
   }
-  const lines: string[] = [`# ${project.name} – review comments`, '', `Site: ${project.baseUrl}  `, headerLine(comments, scope), ''];
+  const isStatic = project.kind === 'static';
+  const lines: string[] = [`# ${project.name} – review comments`, '', ...(isStatic ? [] : [`Site: ${project.baseUrl}  `]), headerLine(comments, scope), ''];
   for (const [path, list] of [...byPage.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    lines.push(`## ${path}`, '', `<${project.baseUrl}${path}>`, '');
+    lines.push(`## ${path}`, '', ...(isStatic ? [] : [`<${project.baseUrl}${path}>`, '']));
     for (const c of list) {
       const el = c.tagName ? `\`<${c.tagName}>\`` : '';
       const view = c.viewport === 'phone' ? ' _(iPhone 15)_' : '';
+      const place = placeOf(c) ? ` _[${placeOf(c)}]_` : '';
       const snippet = c.textSnippet ? ` “${truncate(c.textSnippet, 60)}”` : '';
       const body = c.body.replace(/\r?\n/g, '\n  ');
       const verdict =
         c.status === 'open'
           ? ''
           : ` ${STATUS_MARK[c.status]} _${c.status} by ${who(c.statusBy) || 'unknown'}${c.statusAt ? ` on ${formatDate(c.statusAt)}` : ''}_`;
-      lines.push(`- **${c.author.name ?? c.author.email}** (${formatDate(c.createdAt)})${view}${verdict} – ${el}${snippet} – ${body}`);
+      lines.push(`- **${c.author.name ?? c.author.email}** (${formatDate(c.createdAt)})${view}${place}${verdict} – ${el}${snippet} – ${body}`);
       for (const r of c.replies) {
         lines.push(`  - ↳ **${r.author.name ?? r.author.email}** (${formatDate(r.createdAt)}) – ${r.body.replace(/\r?\n/g, '\n    ')}`);
       }
@@ -142,6 +145,14 @@ export function toMarkdown(project: Project, comments: CommentDto[], scope?: Exp
     lines.push('');
   }
   return lines.join('\n');
+}
+
+/** Where the comment was written: the page's own label, then the dialog it sat in. */
+function placeOf(c: CommentDto): string {
+  const label = c.context?.label?.replace(/\s+/g, ' ') ?? '';
+  const layer = c.context?.layer;
+  const dialog = layer ? (layer.name ? `in dialog “${layer.name}”` : 'in a dialog') : '';
+  return [label, dialog].filter(Boolean).join(' · ');
 }
 
 function truncate(s: string, n: number): string {

@@ -2,10 +2,13 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import { computeAnchor, isReviewerNode, pickMeaningful, resolveAnchor, type Anchor, type ResolveMethod } from '~/lib/client/anchor';
   import { api, type CommentDto, type CommentStatus, type ProjectAccess, type ReplyDto, type Viewport } from '~/lib/client/api';
+  import { layerName, layerOf, openLayers, openersOf, TRAIL_LENGTH, type OpenerAnchor, type TrailClick } from '~/lib/client/layers';
   import { Overlay } from '~/lib/client/overlay';
+  import { DATE_LOCALE, errorText, translator, type Locale } from '~/lib/i18n';
 
   interface Props {
-    project: { id: number; name: string; baseUrl: string };
+    /** `phoneView: false` – the site is not built for phones: no viewport switch, always desktop. */
+    project: { id: number; name: string; baseUrl: string; kind: string; phoneView: boolean };
     user: { id: number; name: string };
     /**
      * What the viewer may do on this project, computed on the server. A rendering hint only – the
@@ -15,15 +18,29 @@
     access: ProjectAccess;
     initialPath: string;
     initialDevice: Viewport;
+    /** `?comment=<id>`: focus (and restore the state of) this comment on the first frame load. */
+    initialComment?: number | null;
+    /** Resolved on the server from Accept-Language / DEFAULT_LOCALE; fixed for the page's lifetime. */
+    locale?: Locale;
   }
-  let { project, user, access, initialPath, initialDevice }: Props = $props();
+  let { project, user, access, initialPath, initialDevice, initialComment = null, locale = 'en' }: Props = $props();
+
+  const t = translator(locale);
+  const dateLocale = DATE_LOCALE[locale];
+  const relative = new Intl.RelativeTimeFormat(dateLocale, { style: 'short', numeric: 'auto' });
+  /** What the error bar says for anything an API call threw. */
+  const failed = (e: unknown) => errorText(t, e);
 
   const PREFIX = `/p/${project.id}`;
   const INTRO_KEY = 'reviewer.intro.v2';
   const DEVICE_KEY = 'reviewer.device';
   /** iPhone 15 CSS viewport; the bezel is cosmetic and sits outside the page box. */
   const PHONE = { w: 393, h: 852, bezel: 14, top: 40 };
-  const host = project.baseUrl.replace(/^https?:\/\//, '');
+  const isStatic = project.kind === 'static';
+  const host = isStatic ? t('toolbar.uploadedSite') : project.baseUrl.replace(/^https?:\/\//, '');
+  /** Hooks an uploaded prototype may define on its window (see docs/architecture.md). */
+  type PrototypeWindow = Window & { reviewerContext?: () => unknown; reviewerRestore?: (state: unknown) => unknown };
+  let deepLink: number | null = initialComment;
 
   // ---- state ----------------------------------------------------------------
   let iframe = $state<HTMLIFrameElement | null>(null);
@@ -32,7 +49,8 @@
   let comments = $state<CommentDto[]>([]);
   let resolved = $state<Record<number, { method: ResolveMethod } | null>>({});
   let filter = $state<'all' | 'mine'>('all');
-  let commentMode = $state(true);
+  /** Browse is the default: the page behaves normally until the reviewer asks to comment (button or C). */
+  let commentMode = $state(false);
   /** ⌥ held: clicks fall through to the page, so the mode indicator has to say so too. */
   let altActive = $state(false);
   let hintOpen = $state(true);
@@ -41,7 +59,8 @@
   let introMute = $state(false);
   // #c123 in the URL (links from the admin table) focuses that comment once loaded.
   let activeId = $state<number | null>(Number(location.hash.match(/^#c(\d+)$/)?.[1]) || null);
-  let draft = $state<{ anchor: Anchor; body: string; saving: boolean } | null>(null);
+  /** `layer`: the dialog the element sits in and the clicks that opened it – see lib/client/layers.ts. */
+  let draft = $state<{ anchor: Anchor; body: string; saving: boolean; layer: { name?: string; openers: OpenerAnchor[] } | null } | null>(null);
   let editing = $state<{ id: number; body: string; saving: boolean } | null>(null);
   let replying = $state<{ commentId: number; body: string; saving: boolean } | null>(null);
   let editingReply = $state<{ id: number; commentId: number; body: string; saving: boolean } | null>(null);
@@ -50,7 +69,9 @@
    * of the way until asked for; `open` is the working set.
    */
   let statusFilter = $state<Record<CommentStatus, boolean>>({ open: true, approved: false, rejected: false });
-  const STATUS_LABEL: Record<CommentStatus, string> = { open: 'Open', approved: 'Approved', rejected: 'Rejected' };
+  /** A chip names a group of comments (Czech: plural), a card the verdict on one (Czech: singular). */
+  const FILTER_LABEL: Record<CommentStatus, string> = { open: t('filter.open'), approved: t('filter.approved'), rejected: t('filter.rejected') };
+  const STATUS_LABEL: Record<CommentStatus, string> = { open: t('status.open'), approved: t('status.approved'), rejected: t('status.rejected') };
   const STATUS_MARK: Record<CommentStatus, string> = { open: '●', approved: '✓', rejected: '✕' };
   /** Admin or owner of this project: verdicts, deleting others' comments and replies, export. */
   const canManage = access !== 'reviewer';
@@ -69,6 +90,11 @@
   let overlay: Overlay | null = null;
   let draftEl: Element | null = null;
   let elements = new Map<number, Element>();
+  /** Clicks that reached the page since the frame loaded – where a dialog's opener is looked up. */
+  let trail: TrailClick[] = [];
+  /** Set while the review screen clicks an opener itself, so Comment mode lets that click through. */
+  let replaying = false;
+  let reopening = false;
   let detachFrame: (() => void) | null = null;
   let sidebarEl = $state<HTMLElement | null>(null);
   let hintTimer: ReturnType<typeof setTimeout> | undefined;
@@ -81,7 +107,7 @@
     const s = Math.min(1, (stageW - 32) / (PHONE.w + 2 * PHONE.bezel), (stageH - 32) / (PHONE.h + PHONE.top + PHONE.bezel));
     return Math.max(0.3, Math.round(s * 1000) / 1000);
   });
-  const deviceLabel = $derived(device === 'phone' ? 'iPhone 15' : 'Desktop');
+  const deviceLabel = $derived(device === 'phone' ? t('toolbar.phone') : t('toolbar.desktop'));
 
   /** Only the current viewport's comments are anchored, numbered and drawn. */
   const forDevice = $derived(comments.filter((c) => c.viewport === device));
@@ -126,7 +152,7 @@
   }
 
   function setDevice(d: Viewport) {
-    if (device === d) return;
+    if (device === d || (d === 'phone' && !project.phoneView)) return;
     device = d;
     cancelDraft();
     activeId = null;
@@ -149,8 +175,12 @@
   }
 
   // The cursor inside the frame is the fastest way to tell the two modes apart.
+  // Read `picking` before touching `overlay`: on the first run there is no overlay yet, and
+  // `overlay?.setPicking(picking)` would short-circuit without reading it, so the effect would
+  // never subscribe and the cursor would stay as the frame loaded it.
   $effect(() => {
-    overlay?.setPicking(picking);
+    const on = picking;
+    overlay?.setPicking(on);
   });
 
   /** The card returns on every visit until the reviewer opts out of it. */
@@ -182,16 +212,28 @@
     const doc = win?.document;
     if (!win || !doc) return;
 
-    frameError = doc.title === 'Reviewer – proxy error';
+    // The proxy's error page carries this meta (lib/proxy/handler.ts); its title is translated.
+    frameError = !!doc.querySelector('meta[name="reviewer-error"]');
     setPath(currentFramePath());
     draft = null;
     draftEl = null;
     elements = new Map();
+    trail = [];
 
-    overlay = new Overlay(doc, {
-      onPlus: (el) => startDraft(el),
-      onMarker: (id) => focusComment(id, { scrollSidebar: true }),
-    });
+    overlay = new Overlay(
+      doc,
+      {
+        onPlus: (el) => startDraft(el),
+        onMarker: (id) => focusComment(id, { scrollSidebar: true }),
+      },
+      {
+        plus: t('overlay.plus'),
+        marker: (m) =>
+          m.status === 'open'
+            ? t('overlay.marker', { number: m.number })
+            : t('overlay.markerDecided', { number: m.number, status: STATUS_LABEL[m.status].toLowerCase() }),
+      },
+    );
     overlay.setPicking(picking);
 
     const onMove = (e: MouseEvent) => {
@@ -204,8 +246,23 @@
       if (el) overlay?.setHover(el); // over bare body/html: keep the last highlight so "+" stays reachable
     };
     const onLeave = () => overlay?.setHover(null);
+    /** Remembers a click that reaches the page, so a dialog it opens can be opened again later. */
+    const record = (e: MouseEvent) => {
+      const target = e.target as Element | null;
+      if (!target || isReviewerNode(target)) return;
+      const el = target.closest('button, a[href], [role="button"], [role="tab"], [role="menuitem"], summary, label, input') ?? pickMeaningful(target);
+      if (!el) return;
+      try {
+        const { selector, xpath, textSnippet, tagName } = computeAnchor(el, doc);
+        trail.push({ anchor: { selector, xpath, textSnippet, tagName }, layer: layerOf(el), open: openLayers(doc) });
+        if (trail.length > TRAIL_LENGTH) trail.shift();
+      } catch {
+        /* an element that cannot be anchored simply cannot be replayed */
+      }
+    };
     const onClick = (e: MouseEvent) => {
-      if (!commentMode) return;
+      if (!commentMode || e.altKey || replaying) record(e);
+      if (!commentMode || replaying) return;
       altActive = e.altKey;
       if (e.altKey) return; // ⌥-click drives the page itself: cookie banners, menus, tabs
       if (isReviewerNode(e.target as Element)) return; // our own buttons
@@ -218,7 +275,7 @@
     };
     const swallow = (e: Event) => {
       // `submit` carries no modifier state – reuse the one from the click that triggered it.
-      if (commentMode && !altActive && !isReviewerNode(e.target as Element)) {
+      if (commentMode && !altActive && !replaying && !isReviewerNode(e.target as Element)) {
         e.preventDefault();
         e.stopPropagation();
       }
@@ -233,6 +290,15 @@
     };
     const onKeyUp = (e: KeyboardEvent) => (altActive = e.altKey);
     const onBlur = () => (altActive = false);
+    // Dialogs, tabs and other client-side changes add and remove commented elements without a
+    // navigation; re-anchor once the page settles, so cards and markers follow what is on screen.
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+    const pageChanges = new win.MutationObserver((records) => {
+      if (records.every((r) => isReviewerNode(r.target as Element))) return;
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(refreshAnchors, 250);
+    });
+    pageChanges.observe(doc.body, { childList: true, subtree: true });
     // Window-level capture listeners fire before the page's own (and the injected script's) document listeners.
     win.addEventListener('mousemove', onMove, true);
     win.addEventListener('click', onClick, true);
@@ -251,12 +317,49 @@
       win.removeEventListener('keyup', onKeyUp, true);
       win.removeEventListener('blur', onBlur);
       doc.removeEventListener('mouseleave', onLeave);
+      pageChanges.disconnect();
+      clearTimeout(settleTimer);
       overlay?.destroy();
       overlay = null;
       detachFrame = null;
     };
 
     await loadComments();
+    if (deepLink != null) {
+      const id = deepLink;
+      deepLink = null;
+      const c = comments.find((x) => x.id === id);
+      if (c) openComment(c);
+    }
+  }
+
+  /** Deep link: show the comment's device and status, then restore its state when it has one, else just focus it. */
+  function openComment(c: CommentDto) {
+    setDevice(c.viewport);
+    statusFilter = { ...statusFilter, [c.status]: true };
+    if (c.context?.state !== undefined) {
+      if (restoreState(c)) return;
+    }
+    focusComment(c.id, { scrollFrame: true, scrollSidebar: true });
+  }
+
+  /** Asks the prototype to write the comment's state into its own storage, then reloads the frame so it re-reads it. */
+  function restoreState(c: CommentDto): boolean {
+    const win = iframe?.contentWindow as PrototypeWindow | null | undefined;
+    let ok = false;
+    try {
+      ok = !!win?.reviewerRestore?.(c.context?.state);
+    } catch {
+      ok = false;
+    }
+    if (!win || !ok) {
+      error = t('error.restore');
+      return false;
+    }
+    error = null;
+    activeId = c.id; // loadComments() focuses it once the frame has reloaded
+    win.location.assign(frameSrc(c.pagePath));
+    return true;
   }
 
   function setPath(p: string) {
@@ -297,7 +400,7 @@
     try {
       comments = await api.listComments(project.id, path);
     } catch (e) {
-      error = (e as Error).message;
+      error = failed(e);
       comments = [];
     } finally {
       loading = false;
@@ -321,8 +424,17 @@
       next[c.id] = r ? { method: r.method } : null;
       if (r) elements.set(c.id, r.el);
     }
-    resolved = next;
+    // Assign only on a change: this runs after every settled page change and must not re-render idle cards.
+    const same =
+      Object.keys(next).length === Object.keys(resolved).length &&
+      Object.entries(next).every(([id, r]) => resolved[Number(id)]?.method === r?.method);
+    if (!same) resolved = next;
     paintMarkers();
+  }
+
+  /** After a page change: re-anchor when a commented element came or went. */
+  function refreshAnchors() {
+    if (forDevice.some((c) => !elements.get(c.id)?.isConnected)) resolveAll();
   }
 
   function paintMarkers() {
@@ -365,10 +477,58 @@
 
   function focusComment(id: number, opts: { scrollFrame?: boolean; scrollSidebar?: boolean } = {}) {
     activeId = id;
-    const el = elements.get(id);
+    const el = elements.get(id)?.isConnected ? elements.get(id) : undefined;
+    // Written inside a dialog that is closed now: open it again the way it was opened.
+    if (opts.scrollFrame && !el) {
+      const c = comments.find((x) => x.id === id);
+      if (c?.context?.layer?.openers.length) void reopenLayer(c);
+    }
     if (opts.scrollFrame && el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     if (opts.scrollSidebar) {
       tick().then(() => sidebarEl?.querySelector<HTMLElement>(`[data-cid="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    }
+  }
+
+  /** Resolves an anchor in the current frame document, retrying while a client-side page renders. */
+  async function waitForAnchor(a: OpenerAnchor, doc: Document, ms: number): Promise<Element | null> {
+    const until = Date.now() + ms;
+    for (;;) {
+      if (iframe?.contentWindow?.document !== doc) return null; // the frame navigated away
+      const r = resolveAnchor(doc, a);
+      if (r) return r.el;
+      if (Date.now() > until) return null;
+      await new Promise((done) => setTimeout(done, 150));
+    }
+  }
+
+  /** Clicks the comment's dialog openers in order, then points at the commented element inside. */
+  async function reopenLayer(c: CommentDto) {
+    const openers = c.context?.layer?.openers ?? [];
+    const doc = iframe?.contentWindow?.document;
+    if (reopening || !doc || !openers.length) return;
+    reopening = true;
+    error = null;
+    try {
+      for (const opener of openers) {
+        const el = await waitForAnchor(opener, doc, 5000);
+        if (!el) {
+          error = t('error.reopen');
+          return;
+        }
+        replaying = true;
+        try {
+          (el as HTMLElement).click();
+        } finally {
+          replaying = false;
+        }
+      }
+      const target = await waitForAnchor(c, doc, 3000);
+      resolveAll();
+      activeId = c.id;
+      if (target) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      else error = t('error.reopenTarget');
+    } finally {
+      reopening = false;
     }
   }
 
@@ -377,7 +537,13 @@
     if (!doc) return;
     draftEl = el;
     overlay?.setHover(el);
-    draft = { anchor: computeAnchor(el, doc), body: '', saving: false };
+    const layer = layerOf(el);
+    draft = {
+      anchor: computeAnchor(el, doc),
+      body: '',
+      saving: false,
+      layer: layer ? { name: layerName(layer) || undefined, openers: openersOf(trail, layer) } : null,
+    };
     editing = null;
     activeId = null;
     await tick();
@@ -395,14 +561,24 @@
     draft.saving = true;
     error = null;
     try {
-      const created = await api.createComment(project.id, path, device, draft.body, draft.anchor);
+      let context: unknown;
+      try {
+        context = (iframe?.contentWindow as PrototypeWindow | null | undefined)?.reviewerContext?.() ?? undefined;
+      } catch {
+        context = undefined; // a broken hook must never block the comment
+      }
+      if (draft.layer) {
+        const own = context && typeof context === 'object' && !Array.isArray(context) ? (context as Record<string, unknown>) : {};
+        context = { ...own, layer: draft.layer };
+      }
+      const created = await api.createComment(project.id, path, device, draft.body, draft.anchor, context);
       comments = [...comments, created];
       if (draftEl) elements.set(created.id, draftEl);
       resolved = { ...resolved, [created.id]: { method: 'selector' } };
       cancelDraft();
       focusComment(created.id, { scrollSidebar: true });
     } catch (e) {
-      error = (e as Error).message;
+      error = failed(e);
       if (draft) draft.saving = false;
     }
   }
@@ -420,13 +596,13 @@
       comments = comments.map((c) => (c.id === updated.id ? updated : c));
       editing = null;
     } catch (e) {
-      error = (e as Error).message;
+      error = failed(e);
       if (editing) editing.saving = false;
     }
   }
 
   async function remove(c: CommentDto) {
-    if (!confirm('Delete this comment?')) return;
+    if (!confirm(t('confirm.deleteComment'))) return;
     try {
       await api.deleteComment(c.id);
       comments = comments.filter((x) => x.id !== c.id);
@@ -435,7 +611,7 @@
       if (replying?.commentId === c.id) replying = null;
       if (editingReply?.commentId === c.id) editingReply = null;
     } catch (e) {
-      error = (e as Error).message;
+      error = failed(e);
     }
   }
 
@@ -456,7 +632,7 @@
         if (editing?.id === c.id) editing = null;
       }
     } catch (e) {
-      error = (e as Error).message;
+      error = failed(e);
     }
   }
 
@@ -485,7 +661,7 @@
       patchReplies(commentId, (rs) => [...rs, created]);
       replying = null;
     } catch (e) {
-      error = (e as Error).message;
+      error = failed(e);
       if (replying) replying.saving = false;
     }
   }
@@ -505,34 +681,34 @@
       patchReplies(commentId, (rs) => rs.map((r) => (r.id === updated.id ? updated : r)));
       editingReply = null;
     } catch (e) {
-      error = (e as Error).message;
+      error = failed(e);
       if (editingReply) editingReply.saving = false;
     }
   }
 
   async function removeReply(c: CommentDto, r: ReplyDto) {
-    if (!confirm('Delete this reply?')) return;
+    if (!confirm(t('confirm.deleteReply'))) return;
     try {
       await api.deleteReply(r.id);
       patchReplies(c.id, (rs) => rs.filter((x) => x.id !== r.id));
       if (editingReply?.id === r.id) editingReply = null;
     } catch (e) {
-      error = (e as Error).message;
+      error = failed(e);
     }
   }
 
   function fmt(s: string) {
-    return new Date(s.replace(' ', 'T') + 'Z').toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    return new Date(s.replace(' ', 'T') + 'Z').toLocaleString(dateLocale, { dateStyle: 'medium', timeStyle: 'short' });
   }
 
   /** Short relative time – the exact stamp stays in the title attribute. */
   function ago(s: string) {
     const diff = (Date.now() - new Date(s.replace(' ', 'T') + 'Z').getTime()) / 1000;
-    if (diff < 90) return 'just now';
-    if (diff < 3600) return `${Math.round(diff / 60)} min ago`;
-    if (diff < 86400) return `${Math.round(diff / 3600)} h ago`;
-    if (diff < 604800) return `${Math.round(diff / 86400)} d ago`;
-    return new Date(s.replace(' ', 'T') + 'Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    if (diff < 90) return t('time.justNow');
+    if (diff < 3600) return relative.format(-Math.round(diff / 60), 'minute');
+    if (diff < 86400) return relative.format(-Math.round(diff / 3600), 'hour');
+    if (diff < 604800) return relative.format(-Math.round(diff / 86400), 'day');
+    return new Date(s.replace(' ', 'T') + 'Z').toLocaleDateString(dateLocale, { day: 'numeric', month: 'short' });
   }
 
   function initials(name: string) {
@@ -575,7 +751,7 @@
     window.addEventListener('message', onMessage);
     window.addEventListener('keydown', onKeydown);
     window.addEventListener('keyup', onKeyup);
-    if (!new URL(location.href).searchParams.has('device')) {
+    if (project.phoneView && !new URL(location.href).searchParams.has('device')) {
       try {
         const saved = localStorage.getItem(DEVICE_KEY);
         if (saved === 'phone' || saved === 'desktop') device = saved;
@@ -629,7 +805,7 @@
 <div class="flex h-full min-h-0 flex-1 flex-col bg-gray-900">
   <!-- toolbar -->
   <header class="chrome flex h-14 shrink-0 items-center gap-2 px-3">
-    <a href="/" class="chrome-btn !px-1.5" title="All projects" aria-label="All projects">
+    <a href="/" class="chrome-btn !px-1.5" title={t('toolbar.allProjects')} aria-label={t('toolbar.allProjects')}>
       <svg viewBox="0 0 24 24" class="h-5 w-5 text-white" aria-hidden="true">
         <rect x="2.6" y="3.6" width="14.8" height="14.8" rx="3.2" fill="none" stroke="currentColor" stroke-width="1.7" opacity="0.6" />
         <circle cx="17.6" cy="17.6" r="4.6" fill="var(--color-brand)" />
@@ -642,73 +818,77 @@
 
     <span class="mx-1 h-6 w-px bg-white/10"></span>
 
-    <button class="chrome-btn !px-1.5" onclick={goBack} title="Back" aria-label="Back">
+    <button class="chrome-btn !px-1.5" onclick={goBack} title={t('toolbar.back')} aria-label={t('toolbar.back')}>
       <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3 5 8l5 5" /></svg>
     </button>
-    <button class="chrome-btn !px-1.5" onclick={goForward} title="Forward" aria-label="Forward">
+    <button class="chrome-btn !px-1.5" onclick={goForward} title={t('toolbar.forward')} aria-label={t('toolbar.forward')}>
       <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 3 5 5-5 5" /></svg>
     </button>
-    <button class="chrome-btn !px-1.5" onclick={reload} title="Reload" aria-label="Reload">
+    <button class="chrome-btn !px-1.5" onclick={reload} title={t('toolbar.reload')} aria-label={t('toolbar.reload')}>
       <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2v3h-3" /></svg>
     </button>
 
     <form class="flex min-w-0 flex-1 items-center" onsubmit={(e) => { e.preventDefault(); navigate(pathInput); }}>
-      <input class="chrome-input" bind:value={pathInput} spellcheck="false" placeholder="/path" aria-label="Page path" />
+      <input class="chrome-input" bind:value={pathInput} spellcheck="false" placeholder="/path" aria-label={t('toolbar.pagePath')} />
     </form>
 
-    <a class="chrome-btn !px-1.5" href={project.baseUrl + path} target="_blank" rel="noopener" title="Open this page on the real site">
+    {#if !isStatic}
+    <a class="chrome-btn !px-1.5" href={project.baseUrl + path} target="_blank" rel="noopener" title={t('toolbar.openOnSite')} aria-label={t('toolbar.openOnSite')}>
       <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h7v7M13 3 7 9M11 9.5V13H3V5h3.5" /></svg>
     </a>
+    {/if}
 
+    {#if project.phoneView}
     <span class="mx-1 h-6 w-px bg-white/10"></span>
 
     <!-- Viewport: the site is rendered at the real width, so responsive layouts can be reviewed too. -->
-    <div class="chrome-seg" role="group" aria-label="Viewport">
+    <div class="chrome-seg" role="group" aria-label={t('toolbar.viewport')}>
       <button
         class={['chrome-seg-item !px-2', device === 'desktop' && 'bg-white/15 text-white hover:text-white']}
         onclick={() => setDevice('desktop')}
         aria-pressed={device === 'desktop'}
-        title="Desktop – the page fills the window"
+        title={t('toolbar.desktopTitle')}
       >
         {@render iconDesktop('h-3.5 w-3.5')}
-        <span class="hidden xl:inline">Desktop</span>
+        <span class="hidden xl:inline">{t('toolbar.desktop')}</span>
       </button>
       <button
         class={['chrome-seg-item !px-2', device === 'phone' && 'bg-white/15 text-white hover:text-white']}
         onclick={() => setDevice('phone')}
         aria-pressed={device === 'phone'}
-        title="iPhone 15 – 393 × 852 px viewport"
+        title={t('toolbar.phoneTitle')}
       >
         {@render iconPhone('h-3.5 w-3.5')}
-        <span class="hidden xl:inline">iPhone 15</span>
+        <span class="hidden xl:inline">{t('toolbar.phone')}</span>
       </button>
     </div>
+    {/if}
 
     <span class="mx-1 h-6 w-px bg-white/10"></span>
 
     <!-- Mode: both options are always on screen, so the label can never be read as an action. -->
-    <div class="chrome-seg" role="group" aria-label="Interaction mode">
-      <button
-        class={['chrome-seg-item', commentMode && 'bg-brand text-white hover:text-white']}
-        onclick={() => setMode(true)}
-        aria-pressed={commentMode}
-        title="Comment mode (C) – clicking an element writes a comment"
-      >
-        {@render iconComment('h-3.5 w-3.5')}
-        Comment
-      </button>
+    <div class="chrome-seg" role="group" aria-label={t('toolbar.mode')}>
       <button
         class={['chrome-seg-item', !commentMode && 'bg-white text-gray-900 hover:text-gray-900']}
         onclick={() => setMode(false)}
         aria-pressed={!commentMode}
-        title="Browse mode (C) – clicking works like the real site"
+        title={t('toolbar.browseTitle')}
       >
         {@render iconCursor('h-3.5 w-3.5')}
-        Browse
+        {t('toolbar.browse')}
+      </button>
+      <button
+        class={['chrome-seg-item', commentMode && 'bg-brand text-white hover:text-white']}
+        onclick={() => setMode(true)}
+        aria-pressed={commentMode}
+        title={t('toolbar.commentTitle')}
+      >
+        {@render iconComment('h-3.5 w-3.5')}
+        {t('toolbar.comment')}
       </button>
     </div>
 
-    <button class="chrome-btn !px-1.5" onclick={() => (intro = true)} title="How this works" aria-label="How this works">
+    <button class="chrome-btn !px-1.5" onclick={() => (intro = true)} title={t('toolbar.help')} aria-label={t('toolbar.help')}>
       <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6.2" /><path d="M6.3 6.2a1.8 1.8 0 1 1 2.4 1.7c-.5.2-.7.6-.7 1.1v.3" /><circle cx="8" cy="11.6" r=".7" fill="currentColor" stroke="none" /></svg>
     </button>
   </header>
@@ -760,15 +940,15 @@
           ]}
         >
           <span class={['h-2 w-2 shrink-0 rounded-full', picking ? 'bg-white' : 'bg-gray-400']}></span>
-          <span class="font-semibold">{commentMode ? 'Comment mode' : 'Browse mode'}</span>
+          <span class="font-semibold">{commentMode ? t('hint.commentMode') : t('hint.browseMode')}</span>
           {#if hintOpen || altActive}
             <span class="truncate opacity-80">
               {#if altActive}
-                ⌥ held – this click goes to the site
+                {t('hint.altHeld')}
               {:else if commentMode}
-                Click any element to comment · hold ⌥ to use the page
+                {t('hint.comment')}
               {:else}
-                Clicks work like the real site · press C to comment
+                {t('hint.browse')}
               {/if}
             </span>
           {/if}
@@ -778,36 +958,36 @@
       {#if intro}
         <div class="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/40 p-6">
           <div class="w-full max-w-md rounded-xl bg-white p-6 shadow-pop">
-            <h2 class="text-lg font-semibold tracking-tight">Two ways to click</h2>
-            <p class="mt-1 text-sm text-gray-600">The site below is live. The mode decides what your clicks do.</p>
+            <h2 class="text-lg font-semibold tracking-tight">{t('intro.title')}</h2>
+            <p class="mt-1 text-sm text-gray-600">{t('intro.lead')}</p>
             <ul class="mt-5 space-y-3">
-              <li class="flex gap-3 rounded-lg border border-brand/30 bg-brand-soft p-3">
-                <span class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand text-white">
-                  {@render iconComment('h-4 w-4')}
-                </span>
-                <span class="text-sm">
-                  <span class="font-semibold">Comment</span> – hover highlights an element, clicking it opens a new comment. Hold
-                  <kbd class="rounded border border-gray-300 bg-white px-1 font-mono text-[11px]">⌥</kbd> to click through to the page once (cookie banners, menus).
-                </span>
-              </li>
               <li class="flex gap-3 rounded-lg border border-gray-200 p-3">
                 <span class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gray-200 text-gray-700">
                   {@render iconCursor('h-4 w-4')}
                 </span>
                 <span class="text-sm">
-                  <span class="font-semibold">Browse</span> – the site behaves normally, so you can navigate to the page you want to review. Existing comments stay visible.
+                  <span class="font-semibold">{t('intro.browseName')}</span> {t('intro.browseText')}
+                </span>
+              </li>
+              <li class="flex gap-3 rounded-lg border border-brand/30 bg-brand-soft p-3">
+                <span class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand text-white">
+                  {@render iconComment('h-4 w-4')}
+                </span>
+                <span class="text-sm">
+                  <span class="font-semibold">{t('intro.commentName')}</span> {t('intro.commentText')}
+                  <kbd class="rounded border border-gray-300 bg-white px-1 font-mono text-[11px]">⌥</kbd> {t('intro.commentTextAfter')}
                 </span>
               </li>
             </ul>
             <p class="mt-4 text-xs text-gray-500">
-              Switch any time with the toggle up top or the <kbd class="rounded border border-gray-300 bg-gray-50 px-1 font-mono text-[11px]">C</kbd> key.
+              {t('intro.switch')} <kbd class="rounded border border-gray-300 bg-gray-50 px-1 font-mono text-[11px]">C</kbd>{t('intro.switchAfter')}
             </p>
             <div class="mt-5 flex items-center justify-between gap-3 border-t border-gray-100 pt-4">
               <label class="flex cursor-pointer items-center gap-2 text-xs text-gray-600 select-none">
                 <input type="checkbox" class="h-4 w-4 rounded border-gray-300 accent-[var(--color-brand)]" bind:checked={introMute} />
-                Got it, don't show this again
+                {t('intro.mute')}
               </label>
-              <button class="btn-primary" onclick={dismissIntro}>Start reviewing</button>
+              <button class="btn-primary" onclick={dismissIntro}>{t('intro.start')}</button>
             </div>
           </div>
         </div>
@@ -819,19 +999,21 @@
       <div class="border-b border-gray-200 bg-white px-3 py-2.5">
         <div class="flex items-center justify-between gap-2">
           <div class="flex min-w-0 items-center gap-1.5">
-            <h2 class="text-sm font-semibold tracking-tight">Comments</h2>
+            <h2 class="text-sm font-semibold tracking-tight">{t('sidebar.title')}</h2>
+            {#if project.phoneView}
             <span
               class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500"
-              title="Comments belong to the viewport they were written in – the page renders differently on a phone"
+              title={t('sidebar.viewportHint')}
             >{deviceLabel}</span>
+            {/if}
           </div>
-          <div class="seg" role="group" aria-label="Filter comments">
-            <button class={filter === 'all' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'all')} aria-pressed={filter === 'all'}>All {inStatus.length}</button>
-            <button class={filter === 'mine' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'mine')} aria-pressed={filter === 'mine'}>Mine {mineCount}</button>
+          <div class="seg" role="group" aria-label={t('sidebar.filter')}>
+            <button class={filter === 'all' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'all')} aria-pressed={filter === 'all'}>{t('sidebar.all', { count: inStatus.length })}</button>
+            <button class={filter === 'mine' ? 'seg-item-on' : 'seg-item'} onclick={() => (filter = 'mine')} aria-pressed={filter === 'mine'}>{t('sidebar.mine', { count: mineCount })}</button>
           </div>
         </div>
-        <p class="meta mt-1 truncate" title={project.baseUrl + path}>{path}</p>
-        <div class="mt-1.5 flex gap-1" role="group" aria-label="Filter by status">
+        <p class="meta mt-1 truncate" title={isStatic ? path : project.baseUrl + path}>{path}</p>
+        <div class="mt-1.5 flex gap-1" role="group" aria-label={t('sidebar.statusFilter')}>
           {#each ['open', 'approved', 'rejected'] as const as st (st)}
             {@const on = statusFilter[st]}
             <button
@@ -844,20 +1026,20 @@
               ]}
               onclick={() => (statusFilter = { ...statusFilter, [st]: !on })}
               aria-pressed={on}
-              title={`${on ? 'Hide' : 'Show'} ${STATUS_LABEL[st].toLowerCase()} comments`}
+              title={t(on ? 'sidebar.hideStatus' : 'sidebar.showStatus', { status: FILTER_LABEL[st].toLowerCase() })}
             >
               <span aria-hidden="true">{STATUS_MARK[st]}</span>
-              {STATUS_LABEL[st]} {countByStatus[st]}
+              {FILTER_LABEL[st]} {countByStatus[st]}
             </button>
           {/each}
         </div>
-        {#if otherCount > 0}
+        <!-- Without the phone view its comments stay in the manage table; there is nothing to switch to. -->
+        {#if otherCount > 0 && project.phoneView}
           <button
             class="mt-1.5 flex w-full items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-left text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-100"
             onclick={() => setDevice(device === 'phone' ? 'desktop' : 'phone')}
           >
-            {otherCount}
-            {otherCount === 1 ? 'comment' : 'comments'} in the {device === 'phone' ? 'desktop' : 'iPhone 15'} view – switch
+            {t(device === 'phone' ? 'sidebar.otherDesktop' : 'sidebar.otherPhone', { count: otherCount })}
           </button>
         {/if}
       </div>
@@ -866,49 +1048,49 @@
         <div class="border-b border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>
       {/if}
       {#if frameError}
-        <div class="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">The target page could not be loaded through the proxy. Check the project base URL.</div>
+        <div class="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{t('sidebar.frameError')}</div>
       {/if}
 
       <div class="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         {#if draft}
           <div class="rounded-lg border border-brand bg-white p-3 shadow-pop ring-4 ring-brand/15">
             <div class="mb-1.5 flex items-center justify-between">
-              <span class="text-xs font-semibold text-brand">New comment</span>
+              <span class="text-xs font-semibold text-brand">{t('draft.title')}</span>
               <code class="meta rounded bg-gray-100 px-1 py-0.5">&lt;{draft.anchor.tagName}&gt;</code>
             </div>
             {#if draft.anchor.textSnippet}
-              <p class="mb-2 line-clamp-2 text-xs italic text-gray-500">“{draft.anchor.textSnippet}”</p>
+              <p class="mb-2 line-clamp-2 text-xs italic text-gray-500">{t('quote', { text: draft.anchor.textSnippet })}</p>
             {/if}
-            <textarea id="draft-body" class="input min-h-24 resize-y" placeholder="What should change here?" bind:value={draft.body} disabled={draft.saving}></textarea>
+            <textarea id="draft-body" class="input min-h-24 resize-y" placeholder={t('draft.placeholder')} bind:value={draft.body} disabled={draft.saving}></textarea>
             <div class="mt-2 flex items-center justify-between">
-              <span class="meta">⌘↵ save · esc cancel</span>
+              <span class="meta">{t('draft.keys')}</span>
               <div class="flex gap-2">
-                <button class="btn-ghost" onclick={cancelDraft} disabled={draft.saving}>Cancel</button>
-                <button class="btn-primary" onclick={saveDraft} disabled={draft.saving || !draft.body.trim()}>{draft.saving ? 'Saving…' : 'Save'}</button>
+                <button class="btn-ghost" onclick={cancelDraft} disabled={draft.saving}>{t('action.cancel')}</button>
+                <button class="btn-primary" onclick={saveDraft} disabled={draft.saving || !draft.body.trim()}>{draft.saving ? t('action.saving') : t('action.save')}</button>
               </div>
             </div>
           </div>
         {/if}
 
         {#if loading}
-          <p class="py-6 text-center text-sm text-gray-400">Loading…</p>
+          <p class="py-6 text-center text-sm text-gray-400">{t('sidebar.loading')}</p>
         {:else if visible.length === 0 && !draft}
           <div class="px-4 py-12 text-center">
             <span class="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-gray-200 text-gray-500">
               {@render iconComment('h-5 w-5')}
             </span>
             <p class="text-sm font-medium text-gray-700">
-              {filter === 'mine' ? 'Nothing from you here' : 'No comments here'}
+              {filter === 'mine' ? t('sidebar.emptyMine') : t('sidebar.empty')}
             </p>
-            <p class="mt-0.5 text-xs text-gray-400">{path} · {deviceLabel}</p>
+            <p class="mt-0.5 text-xs text-gray-400">{path}{project.phoneView ? ` · ${deviceLabel}` : ''}</p>
             {#if hiddenCount > 0}
-              <p class="mt-1 text-xs text-gray-500">{hiddenCount} {hiddenCount === 1 ? 'comment is' : 'comments are'} hidden by the status filter.</p>
+              <p class="mt-1 text-xs text-gray-500">{t('sidebar.hiddenByStatus', { count: hiddenCount })}</p>
             {/if}
             <p class="mt-1 text-xs text-gray-500">
               {#if commentMode}
-                Click anything in the page to write the first one.
+                {t('sidebar.emptyComment')}
               {:else}
-                Switch to Comment mode to add one.
+                {t('sidebar.emptyBrowse')}
               {/if}
             </p>
           </div>
@@ -939,30 +1121,49 @@
                 <span class={['inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-semibold tabular-nums', isActive ? 'bg-amber-400 text-gray-900' : c.status === 'approved' ? 'bg-emerald-600/70 text-white' : c.status === 'rejected' ? 'bg-red-600/70 text-white' : c.mine ? 'bg-brand text-white' : 'bg-gray-500 text-white']}>
                   {decided ? STATUS_MARK[c.status] : numberOf.get(c.id)}
                 </span>
-                <span class="truncate text-sm font-medium" title={c.author.email}>{c.mine ? 'You' : (c.author.name ?? c.author.email)}</span>
+                <span class="truncate text-sm font-medium" title={c.author.email}>{c.mine ? t('card.you') : (c.author.name ?? c.author.email)}</span>
               </div>
               <time class="shrink-0 text-[11px] text-gray-400" datetime={c.createdAt} title={fmt(c.createdAt)}>{ago(c.createdAt)}</time>
             </div>
 
             <p class="mb-2 truncate">
               {#if c.tagName}<code class="meta rounded bg-gray-100 px-1 py-0.5">&lt;{c.tagName}&gt;</code>{/if}
-              {#if c.textSnippet}<span class="text-xs italic text-gray-500"> “{c.textSnippet}”</span>{/if}
+              {#if c.textSnippet}<span class="text-xs italic text-gray-500"> {t('quote', { text: c.textSnippet })}</span>{/if}
             </p>
 
-            {#if !found}
-              <p class="mb-2 inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800" title="The element this comment was anchored to is no longer on the page (site changed?). The comment is kept.">
-                Element not found
+            {#if c.context?.label}
+              <p class="mb-2 text-[11px] leading-4 text-gray-500">{c.context.label}</p>
+            {/if}
+
+            {#if c.context?.layer}
+              <p class="mb-2 text-[11px] leading-4 text-gray-500">{c.context.layer.name ? t('card.inLayer', { name: c.context.layer.name }) : t('card.inLayerUnnamed')}</p>
+            {/if}
+
+            {#if !found && c.context?.layer?.openers.length}
+              <button
+                class="mb-2 inline-flex items-center gap-1 rounded bg-brand/10 px-1.5 py-0.5 text-[11px] font-medium text-brand hover:bg-brand/20"
+                title={t('card.openLayerTitle')}
+                onclick={(e) => { e.stopPropagation(); activeId = c.id; void reopenLayer(c); }}
+              >
+                {t('card.openLayer')}
+              </button>
+            {:else if !found}
+              <p class="mb-2 inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800" title={t('card.notFoundTitle')}>
+                {t('card.notFound')}
               </p>
             {:else if resolved[c.id]?.method === 'text'}
-              <p class="mb-2 inline-flex items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600" title="Matched by text content – the page structure changed since the comment was made.">
-                Matched by text
+              <p class="mb-2 inline-flex items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600" title={t('card.byTextTitle')}>
+                {t('card.byText')}
               </p>
             {/if}
 
             {#if decided}
               <p class={['mb-2 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium', c.status === 'approved' ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-800']}>
                 <span aria-hidden="true">{STATUS_MARK[c.status]}</span>
-                {STATUS_LABEL[c.status]} by {c.statusBy?.id === user.id ? 'you' : (c.statusBy?.name ?? c.statusBy?.email ?? 'someone')}
+                {t('card.decidedBy', {
+                  status: STATUS_LABEL[c.status],
+                  who: c.statusBy?.id === user.id ? t('card.decidedByYou') : (c.statusBy?.name ?? c.statusBy?.email ?? t('card.decidedBySomeone')),
+                })}
                 {#if c.statusAt}<time datetime={c.statusAt} title={fmt(c.statusAt)}>· {ago(c.statusAt)}</time>{/if}
               </p>
             {/if}
@@ -970,8 +1171,8 @@
             {#if editing?.id === c.id}
               <textarea class="input min-h-20 resize-y" bind:value={editing.body} disabled={editing.saving} onclick={(e) => e.stopPropagation()}></textarea>
               <div class="mt-2 flex justify-end gap-2">
-                <button class="btn-ghost" onclick={(e) => { e.stopPropagation(); editing = null; }}>Cancel</button>
-                <button class="btn-primary" onclick={(e) => { e.stopPropagation(); saveEdit(); }} disabled={editing.saving || !editing.body.trim()}>Save</button>
+                <button class="btn-ghost" onclick={(e) => { e.stopPropagation(); editing = null; }}>{t('action.cancel')}</button>
+                <button class="btn-primary" onclick={(e) => { e.stopPropagation(); saveEdit(); }} disabled={editing.saving || !editing.body.trim()}>{t('action.save')}</button>
               </div>
             {:else}
               <p class={['whitespace-pre-wrap text-sm leading-relaxed', decided ? 'text-gray-500' : 'text-gray-800']}>{c.body}</p>
@@ -983,23 +1184,23 @@
                   {@const canDeleteReply = r.mine || canManage}
                   <li class="group/reply">
                     <div class="flex items-baseline justify-between gap-2">
-                      <span class="truncate text-xs font-medium text-gray-700" title={r.author.email}>{r.mine ? 'You' : (r.author.name ?? r.author.email)}</span>
+                      <span class="truncate text-xs font-medium text-gray-700" title={r.author.email}>{r.mine ? t('card.you') : (r.author.name ?? r.author.email)}</span>
                       <time class="shrink-0 text-[10px] text-gray-400" datetime={r.createdAt} title={fmt(r.createdAt)}>{ago(r.createdAt)}</time>
                     </div>
                     {#if editingReply?.id === r.id}
                       <textarea class="input mt-1 min-h-16 resize-y" bind:value={editingReply.body} disabled={editingReply.saving} onclick={(e) => e.stopPropagation()}></textarea>
                       <div class="mt-1.5 flex justify-end gap-2">
-                        <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); editingReply = null; }}>Cancel</button>
-                        <button class="btn-primary !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); saveReplyEdit(); }} disabled={editingReply.saving || !editingReply.body.trim()}>Save</button>
+                        <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); editingReply = null; }}>{t('action.cancel')}</button>
+                        <button class="btn-primary !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); saveReplyEdit(); }} disabled={editingReply.saving || !editingReply.body.trim()}>{t('action.save')}</button>
                       </div>
                     {:else}
                       <p class="whitespace-pre-wrap text-[13px] leading-relaxed text-gray-700">{r.body}</p>
                       {#if canDeleteReply}
                         <div class="mt-0.5 flex gap-1 text-xs opacity-0 transition-opacity group-hover/reply:opacity-100 group-focus-within/reply:opacity-100">
                           {#if r.mine}
-                            <button class="btn-ghost !px-1.5 !py-0 !text-[11px]" onclick={(e) => { e.stopPropagation(); startReplyEdit(c, r); }}>Edit</button>
+                            <button class="btn-ghost !px-1.5 !py-0 !text-[11px]" onclick={(e) => { e.stopPropagation(); startReplyEdit(c, r); }}>{t('action.edit')}</button>
                           {/if}
-                          <button class="btn-ghost !px-1.5 !py-0 !text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); removeReply(c, r); }}>Delete</button>
+                          <button class="btn-ghost !px-1.5 !py-0 !text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); removeReply(c, r); }}>{t('action.delete')}</button>
                         </div>
                       {/if}
                     {/if}
@@ -1013,38 +1214,43 @@
                 <textarea
                   id={`reply-${c.id}`}
                   class="input min-h-16 resize-y"
-                  placeholder="Reply…"
+                  placeholder={t('reply.placeholder')}
                   bind:value={replying.body}
                   disabled={replying.saving}
                   onclick={(e) => e.stopPropagation()}
                 ></textarea>
                 <div class="mt-1.5 flex items-center justify-between">
-                  <span class="meta">⌘↵ send · esc cancel</span>
+                  <span class="meta">{t('reply.keys')}</span>
                   <div class="flex gap-2">
-                    <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); replying = null; }} disabled={replying.saving}>Cancel</button>
+                    <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); replying = null; }} disabled={replying.saving}>{t('action.cancel')}</button>
                     <button class="btn-primary !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); saveReply(); }} disabled={replying.saving || !replying.body.trim()}>
-                      {replying.saving ? 'Sending…' : 'Reply'}
+                      {replying.saving ? t('action.sending') : t('action.reply')}
                     </button>
                   </div>
                 </div>
               </div>
             {:else if editing?.id !== c.id}
-              <div class="mt-2 flex items-center justify-between gap-1 text-xs">
-                <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startReply(c); }}>Reply</button>
-                <div class="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+              <div class="mt-2 flex flex-wrap items-center justify-between gap-1 text-xs [&_button]:whitespace-nowrap">
+                <div class="flex gap-1">
+                  <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startReply(c); }}>{t('action.reply')}</button>
+                  {#if c.context?.state !== undefined}
+                    <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); restoreState(c); }} title={t('action.restoreTitle')}>{t('action.restore')}</button>
+                  {/if}
+                </div>
+                <div class="ml-auto flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                   {#if canManage}
                     {#if decided}
-                      <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); decide(c, 'open'); }}>Reopen</button>
+                      <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); decide(c, 'open'); }}>{t('action.reopen')}</button>
                     {:else}
-                      <button class="btn-ghost !px-2 !py-0.5 !text-xs text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800" onclick={(e) => { e.stopPropagation(); decide(c, 'approved'); }}>Approve</button>
-                      <button class="btn-ghost !px-2 !py-0.5 !text-xs text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); decide(c, 'rejected'); }}>Reject</button>
+                      <button class="btn-ghost !px-2 !py-0.5 !text-xs text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800" onclick={(e) => { e.stopPropagation(); decide(c, 'approved'); }}>{t('action.approve')}</button>
+                      <button class="btn-ghost !px-2 !py-0.5 !text-xs text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); decide(c, 'rejected'); }}>{t('action.reject')}</button>
                     {/if}
                   {/if}
                   {#if canEdit}
-                    <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startEdit(c); }}>Edit</button>
+                    <button class="btn-ghost !px-2 !py-0.5 !text-xs" onclick={(e) => { e.stopPropagation(); startEdit(c); }}>{t('action.edit')}</button>
                   {/if}
                   {#if canDelete}
-                    <button class="btn-ghost !px-2 !py-0.5 !text-xs text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); remove(c); }}>Delete</button>
+                    <button class="btn-ghost !px-2 !py-0.5 !text-xs text-red-700 hover:bg-red-50 hover:text-red-800" onclick={(e) => { e.stopPropagation(); remove(c); }}>{t('action.delete')}</button>
                   {/if}
                 </div>
               </div>
@@ -1055,7 +1261,7 @@
 
       {#if canManage}
         <a class="flex items-center justify-between border-t border-gray-200 bg-white px-3 py-2.5 text-xs font-medium text-gray-600 transition-colors hover:text-gray-900" href={`/projects/${project.id}/manage`}>
-          Manage project &amp; export
+          {t('sidebar.manage')}
           <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5" /></svg>
         </a>
       {/if}

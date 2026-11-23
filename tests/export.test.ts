@@ -3,7 +3,7 @@ import type { CommentDto } from '~/lib/comments';
 import type { Project } from '~/lib/db/schema';
 import { exportComments, parseStatusFilter, toMarkdown } from '~/lib/export';
 
-const project = { id: 1, name: 'Site', baseUrl: 'https://site.example.com', createdBy: 1, createdAt: '2026-01-01 00:00:00' } as Project;
+const project = { id: 1, name: 'Site', baseUrl: 'https://site.example.com', kind: 'url', siteUploadedAt: null, createdBy: 1, createdAt: '2026-01-01 00:00:00' } as Project;
 
 const anna = { id: 1, name: 'Anna', email: 'anna@example.com' };
 const bob = { id: 2, name: 'Bob', email: 'bob@example.com' };
@@ -20,6 +20,7 @@ function comment(over: Partial<CommentDto> = {}): CommentDto {
     textSnippet: null,
     tagName: 'h1',
     rectTop: 0,
+    context: null,
     createdAt: '2026-03-01 10:00:00',
     updatedAt: '2026-03-01 10:00:00',
     author: anna,
@@ -129,5 +130,39 @@ describe('json export', () => {
     const parsed = JSON.parse(body);
     expect(parsed.filter).toEqual({ statuses: ['approved'], totals: { open: 1, approved: 0, rejected: 0 } });
     expect(parsed.comments).toEqual([]);
+  });
+});
+
+describe('export of the page context', () => {
+  const withCtx = comment({ context: { label: 'Kácení · krok 3', state: { step: 3 } } });
+
+  it('puts the label into a CSV column called context', () => {
+    const csv = exportComments(project, [withCtx, comment({ id: 2 })], 'csv').body;
+    const [header, first, second] = csv.replace(/^\uFEFF/, '').split('\n');
+    expect(header!.split(',')).toContain('context');
+    expect(first).toContain('Kácení · krok 3');
+    expect(second).not.toContain('Kácení');
+  });
+
+  it('puts the label into Markdown', () => {
+    expect(toMarkdown(project, [withCtx])).toContain('_[Kácení · krok 3]_');
+  });
+
+  it('names the dialog a comment was written in', () => {
+    const inDialog = comment({ context: { label: 'Kácení · krok 1', layer: { name: 'Spustit analýzu', openers: [] } } });
+    expect(toMarkdown(project, [inDialog])).toContain('_[Kácení · krok 1 · in dialog “Spustit analýzu”]_');
+    const csv = exportComments(project, [comment({ context: { layer: { openers: [] } } })], 'csv').body;
+    expect(csv).toContain('in a dialog');
+  });
+
+  it('keeps the whole context object in JSON', () => {
+    const json = JSON.parse(exportComments(project, [withCtx], 'json').body);
+    expect(json.comments[0].context).toEqual({ label: 'Kácení · krok 3', state: { step: 3 } });
+  });
+
+  it('omits the site address for an uploaded site', () => {
+    const md = toMarkdown({ ...project, kind: 'static', baseUrl: '' }, [withCtx]);
+    expect(md).not.toContain('Site:');
+    expect(md).not.toContain('<>');
   });
 });

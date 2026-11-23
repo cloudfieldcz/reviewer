@@ -7,6 +7,6 @@ export const GET: APIRoute = handler((ctx) => json(listProjects(ctx.locals.user)
 export const POST: APIRoute = handler(async (ctx) => {
   requireAdmin(ctx);
   const body = await readJson(ctx.request);
-  const project = await createProject({ name: str(body.name), baseUrl: str(body.baseUrl ?? body.base_url) }, ctx.locals.user.id);
+  const project = await createProject({ name: str(body.name), baseUrl: str(body.baseUrl ?? body.base_url), kind: body.kind === 'static' ? 'static' : 'url' }, ctx.locals.user.id);
   return json(project, { status: 201 });
 });

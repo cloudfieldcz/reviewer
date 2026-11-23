@@ -3,7 +3,14 @@ import Review from '~/components/Review.svelte';
 import Layout from '~/layouts/Layout.astro';
 import { projectAccess } from '~/lib/access';
 import { normalizePagePath, normalizeViewport } from '~/lib/comments';
+import { translator } from '~/lib/i18n';
+import { requestLocale } from '~/lib/i18n/server';
 import { getProject } from '~/lib/projects';
+
+// The one translated screen: reviewers comment here, owners and admins work elsewhere in English.
+const locale = requestLocale(Astro.request);
+const t = translator(locale);
+Astro.response.headers.set('vary', 'accept-language');
 
 const id = Number(Astro.params.id);
 if (!Number.isInteger(id)) return Astro.redirect('/');
@@ -11,7 +18,7 @@ let project;
 try {
   project = getProject(id);
 } catch {
-  return new Response('Project not found', { status: 404 });
+  return new Response(t('page.projectNotFound'), { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
 }
 
 const rawPath = Astro.url.searchParams.get('path');
@@ -21,20 +28,26 @@ try {
 } catch {
   initialPath = '/';
 }
-// A comment link from the admin table carries the viewport it was written in.
-const initialDevice = normalizeViewport(Astro.url.searchParams.get('device'));
+// A comment link from the admin table carries the viewport it was written in. A project without the
+// phone view is always reviewed on the desktop, whatever the link says.
+const initialDevice = project.phoneView ? normalizeViewport(Astro.url.searchParams.get('device')) : 'desktop';
+// A shared link to one comment: the island focuses it (and restores its state) on the first frame load.
+const rawComment = Number(Astro.url.searchParams.get('comment'));
+const initialComment = Number.isInteger(rawComment) && rawComment > 0 ? rawComment : null;
 const user = Astro.locals.user;
 // A rendering hint for the island: owners are `role: 'user'`, so the island must not look at the role.
 const access = projectAccess(project.id, user);
 ---
 
-<Layout title={`Review · ${project.name}`} fullscreen>
+<Layout title={t('page.title', { name: project.name })} fullscreen locale={locale}>
   <Review
     client:only="svelte"
-    project={{ id: project.id, name: project.name, baseUrl: project.baseUrl }}
+    project={{ id: project.id, name: project.name, baseUrl: project.baseUrl, kind: project.kind, phoneView: project.phoneView }}
     user={{ id: user.id, name: user.name }}
     access={access}
     initialPath={initialPath}
     initialDevice={initialDevice}
+    initialComment={initialComment}
+    locale={locale}
   />
 </Layout>

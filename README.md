@@ -48,6 +48,8 @@ docker compose up --build   # same thing in Docker, still without auth (see dock
 | Variable | Default | Meaning |
 |---|---|---|
 | `DATABASE_PATH` | `./data/reviewer.db` (`/data/reviewer.db` in Docker) | SQLite file; parent dir is created |
+| `SITES_DIR` | `./data/sites` (`/data/sites` in Docker) | Uploaded sites, one folder per project id |
+| `DEFAULT_LOCALE` | `en` | Language of the review screen (`cs` or `en`) when the browser's `Accept-Language` names none of `cs`, `sk`, `en`. Only the review screen and the pages shown in its frame are translated |
 | `PUBLIC_ORIGIN` | derived from `X-Forwarded-Proto/Host` | Public origin of Reviewer, e.g. `https://reviewer.example.com`. Used for absolute links inside proxied pages – set it in production |
 | `ADMIN_EMAILS` | – | Comma-separated bootstrap admins (case-insensitive). Keep empty once app roles are assigned |
 | `DEFAULT_ROLE` | – | Role for signed-in users without an `ADMIN`/`USER` app role: `user`, or empty (→ 403). `admin` also works, for local dev only |
@@ -76,6 +78,32 @@ volume. Nothing in it is tied to a particular environment – all site-specific 
 Already running Traefik and Redis? Take only the `oauth2-reviewer` and `reviewer` services from the
 file, drop `traefik`/`redis` from their `depends_on` and point
 `OAUTH2_PROXY_REDIS_CONNECTION_URL` at your Redis.
+
+### Scripts: Azure VM, Entra ID, roll-out, backup
+
+The same stack, scripted. Everything but `deploy/azure/` works against any Docker host over SSH.
+
+```bash
+az login
+DNS_LABEL=my-reviewer deploy/azure/provision.sh        # VM + DNS name + firewall (80/443 open, 22 from your IP)
+deploy/azure/entra-app.sh my-reviewer.westeurope.cloudapp.azure.com   # app registration → deploy/.env
+SSH_TARGET=azureuser@my-reviewer.westeurope.cloudapp.azure.com deploy/deploy.sh
+deploy/azure/invite-guest.sh someone@partner.example   # B2B guest (or a tenant member) + the USER role
+```
+
+- `entra-app.sh` does the steps of "Entra ID app registration" below and switches on *Assignment
+  required*: only people with an app role get in. `deploy/.env` therefore has no `ADMIN_EMAILS` and no
+  `DEFAULT_ROLE`.
+- People from another organisation come in as **B2B guests** of your tenant. They sign in with their
+  own organisation's account; nothing is registered or approved in their tenant.
+- `deploy.sh` copies the compose file and `.env` to `~/reviewer` on the host, pulls and recreates.
+  `BUILD_REF=<branch|tag|commit>` builds the image on the host from the public repository instead of
+  pulling a release – for a branch without a published image. That build goes straight to
+  `registry.npmjs.org`, not through the Shieldoo Gate.
+  `LOCAL_IMAGE=<image>` ships an image built on your machine over SSH instead (`docker save` →
+  `docker load`), so a build made through the gate reaches the host without a registry.
+- `backup.sh` saves the `reviewer-data` volume (database + uploaded sites) to a local `tar.gz`;
+  `backup.sh restore <file>` puts it back. Moving to another host = deploy there, restore, repoint DNS.
 
 ### Releases
 
@@ -155,6 +183,16 @@ When a comment is saved, the app stores: a short unique CSS selector (`@medv/fin
 
 Resolution order when a page loads: selector hit whose text still matches → XPath hit whose text matches → any element of the same tag with the same text (shown as *matched by text*) → unique selector hit with changed text (the element was probably edited in response to the comment). A positional XPath alone is never trusted. Anchoring is retried a few times after load for pages that render late. If nothing matches, the comment stays in the sidebar flagged *element not found*.
 
+### Stable anchors
+
+A site you control can make anchors immune to layout changes. Put `data-review-anchor="…"` on the elements people comment on, or declare your own attribute names in the page head:
+
+```html
+<meta name="reviewer-anchors" content="data-poc-anchor data-foo">
+```
+
+Names are separated by spaces or commas; only `data-…` names (lower-case letters, digits, dashes) count. `data-review-anchor` is always honoured after the declared ones. An element carrying one of these attributes with a value unique on the page is anchored by `[attr="value"]` instead of a derived selector.
+
 ## API
 
 All under `/api`, JSON, identity from the middleware.
@@ -167,7 +205,7 @@ GET    /api/projects                             both roles
 POST   /api/projects                             admin   { name, baseUrl }
 POST   /api/projects/probe                       admin   { url } → { ok, status, title, error }
 GET    /api/projects/:id
-PATCH  /api/projects/:id                         admin
+PATCH  /api/projects/:id                         admin   { name?, baseUrl?, phoneView?: boolean }
 DELETE /api/projects/:id                         admin   (cascades to comments)
 GET    /api/projects/:id/export?format=csv|md|json[&status=approved,rejected|all][&path=/x][&download=0]
                                                  admin or owner; status defaults to approved, unknown values → 400
@@ -199,6 +237,7 @@ src/
   lib/projects.ts, comments.ts, replies.ts, export.ts, url.ts (SSRF guard)
   lib/proxy/               fetch.ts (undici, limits) · rewrite.ts (cheerio) · inject.ts · handler.ts
   lib/client/              anchor.ts (finder/xpath/text) · overlay.ts (outline, +, markers) · api.ts
+  lib/i18n/                review-screen dictionaries (en.ts keys, cs.ts) · t() · locale resolution
   components/Review.svelte the review screen island (toolbar, iframe wiring, sidebar)
   pages/                   index (projects) · review/[id] · projects/[id]/manage · admin/users · p/[id]/[...path] · api/*
 tests/                     vitest: proxy rewriting, auth, URL validation, project counts, access levels and owners,

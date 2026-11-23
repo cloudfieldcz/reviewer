@@ -1,5 +1,7 @@
 import type { Project } from '../db/schema';
 import { env } from '../env';
+import { translator, type Locale } from '../i18n';
+import { requestLocale } from '../i18n/server';
 import { fetchTarget, readBodyLimited } from './fetch';
 import { rewriteHtml, STRIPPED_RESPONSE_HEADERS, toProxyPath, toTargetUrl } from './rewrite';
 
@@ -36,7 +38,8 @@ export async function proxyRequest({ project, pathAndQuery, request }: ProxyRequ
       acceptLanguage: request.headers.get('accept-language'),
     });
   } catch (e) {
-    return errorPage(502, `Target site did not respond: ${(e as Error).message}`, target);
+    const locale = requestLocale(request);
+    return errorPage(502, translator(locale)('frame.noResponse', { detail: (e as Error).message }), target, locale);
   }
 
   const ctx = { baseUrl: project.baseUrl, projectId: project.id, pageUrl: target, publicOrigin: origin };
@@ -67,7 +70,8 @@ export async function proxyRequest({ project, pathAndQuery, request }: ProxyRequ
   try {
     body = await readBodyLimited(upstream);
   } catch (e) {
-    return errorPage(502, (e as Error).message, target);
+    const locale = requestLocale(request);
+    return errorPage(502, translator(locale)('frame.readFailed', { detail: (e as Error).message }), target, locale);
   }
   const html = rewriteHtml(decodeHtml(body, contentType), ctx);
   headers.set('content-type', 'text/html; charset=utf-8');
@@ -88,11 +92,16 @@ function decodeHtml(buf: Buffer, contentType: string): string {
   }
 }
 
-function errorPage(status: number, message: string, target: string): Response {
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Reviewer – proxy error</title>
+/** Marks the proxy's own error page for the review screen, whatever language its title is in. */
+export const PROXY_ERROR_META = 'reviewer-error';
+
+/** Rendered inside the review frame, in the reviewer's language; `message` is already localised. */
+export function errorPage(status: number, message: string, target: string, locale: Locale = 'en'): Response {
+  const t = translator(locale);
+  const html = `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><meta name="${PROXY_ERROR_META}" content="proxy"><title>${escapeHtml(t('frame.errorTitle'))}</title>
 <style>body{font:15px/1.5 system-ui,sans-serif;margin:0;padding:3rem;color:#333;background:#fafafa}code{background:#eee;padding:.1em .3em;border-radius:3px}</style></head>
-<body><h1 style="font-size:1.25rem">The page could not be loaded</h1><p>${escapeHtml(message)}</p><p>Target: <code>${escapeHtml(target)}</code></p></body></html>`;
-  return new Response(html, { status, headers: { 'content-type': 'text/html; charset=utf-8', ...ALWAYS_HEADERS } });
+<body><h1 style="font-size:1.25rem">${escapeHtml(t('frame.errorHeading'))}</h1><p>${escapeHtml(message)}</p><p>${escapeHtml(t('frame.target'))} <code>${escapeHtml(target)}</code></p></body></html>`;
+  return new Response(html, { status, headers: { 'content-type': 'text/html; charset=utf-8', vary: 'accept-language', ...ALWAYS_HEADERS } });
 }
 
 function escapeHtml(s: string): string {

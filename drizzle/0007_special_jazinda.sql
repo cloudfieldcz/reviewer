@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `phone_view` integer DEFAULT true NOT NULL;

@@ -2,6 +2,7 @@ import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import { canManageProject, requireProjectManager } from './access';
 import type { AuthUser } from './auth';
+import { parseContext, serializeContext, type CommentContext } from './context';
 import { db, schema } from './db';
 import { HttpError } from './http';
 import { getProject } from './projects';
@@ -42,6 +43,8 @@ export interface CommentDto {
   textSnippet: string | null;
   tagName: string | null;
   rectTop: number | null;
+  /** What the page reported about its own state when the comment was made; null if nothing. */
+  context: CommentContext | null;
   createdAt: string;
   updatedAt: string;
   author: { id: number; name: string | null; email: string };
@@ -68,6 +71,7 @@ const selectShape = {
   textSnippet: schema.comments.textSnippet,
   tagName: schema.comments.tagName,
   rectTop: schema.comments.rectTop,
+  context: schema.comments.context,
   createdAt: schema.comments.createdAt,
   updatedAt: schema.comments.updatedAt,
   status: schema.comments.status,
@@ -80,7 +84,8 @@ const selectShape = {
   setterEmail: statusSetter.email,
 };
 
-type Row = Omit<CommentDto, 'author' | 'mine' | 'viewport' | 'status' | 'statusBy' | 'replies'> & {
+type Row = Omit<CommentDto, 'author' | 'mine' | 'viewport' | 'status' | 'statusBy' | 'replies' | 'context'> & {
+  context: string | null;
   viewport: string;
   status: string;
   authorId: number;
@@ -92,9 +97,10 @@ type Row = Omit<CommentDto, 'author' | 'mine' | 'viewport' | 'status' | 'statusB
 };
 
 function toDto(r: Row, viewer: AuthUser, replies: ReplyDto[] = []): CommentDto {
-  const { authorId, authorName, authorEmail, setterId, setterName, setterEmail, viewport, status, ...rest } = r;
+  const { authorId, authorName, authorEmail, setterId, setterName, setterEmail, viewport, status, context, ...rest } = r;
   return {
     ...rest,
+    context: parseContext(context),
     viewport: normalizeViewport(viewport),
     // The column is unconstrained TEXT; anything the app did not write is a bug, not a state to invent.
     status: normalizeStatus(status),
@@ -165,6 +171,8 @@ export interface CommentInput {
   textSnippet?: string | null;
   tagName?: string | null;
   rectTop?: number | null;
+  /** Raw value from the client; validated and capped by `serializeContext`. */
+  context?: unknown;
 }
 
 /** Normalizes a page path coming from the client: always starts with '/', has no trailing slash (except '/'), never contains the /p/{id} prefix or an origin. */
@@ -186,6 +194,7 @@ export function createComment(input: CommentInput, viewer: AuthUser): CommentDto
   getProject(input.projectId);
   const body = input.body.trim();
   if (!body) throw new HttpError(400, 'Comment must not be empty');
+  const context = serializeContext(input.context);
   const row = db
     .insert(schema.comments)
     .values({
@@ -199,6 +208,7 @@ export function createComment(input: CommentInput, viewer: AuthUser): CommentDto
       textSnippet: input.textSnippet ?? null,
       tagName: input.tagName ?? null,
       rectTop: input.rectTop ?? null,
+      context,
     })
     .returning({ id: schema.comments.id })
     .get();

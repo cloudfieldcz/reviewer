@@ -3,6 +3,7 @@
  * markers for existing comments. Everything lives in one container (`[data-reviewer-ui]`) so it can
  * be ignored by anchoring and removed on navigation. Element styles are never touched.
  */
+import { isReviewerNode } from './anchor';
 
 export interface MarkerSpec {
   id: number;
@@ -11,6 +12,52 @@ export interface MarkerSpec {
   mine: boolean;
   active: boolean;
   status: 'open' | 'approved' | 'rejected';
+}
+
+/** Texts drawn into the page; the caller owns them, so the overlay never has to know the locale. */
+export interface OverlayLabels {
+  /** Title of the "+" button. */
+  plus: string;
+  /** Title of a marker. */
+  marker: (m: MarkerSpec) => string;
+}
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/**
+ * Where to hit-test an element for "is something drawn over it": the centre of its rect clipped to
+ * the viewport plus four points inset 25 % from the clipped corners. Viewport (client) coordinates in
+ * and out. Empty when no part of the rect is on screen (scrolled away, zero size) – the caller must not
+ * read that as "covered".
+ */
+export function samplePoints(rect: { left: number; top: number; width: number; height: number }, viewport: { width: number; height: number }): Point[] {
+  const left = Math.max(rect.left, 0);
+  const top = Math.max(rect.top, 0);
+  const right = Math.min(rect.left + rect.width, viewport.width);
+  const bottom = Math.min(rect.top + rect.height, viewport.height);
+  const w = right - left;
+  const h = bottom - top;
+  if (!(w > 0 && h > 0)) return [];
+  const at = (fx: number, fy: number): Point => ({ x: left + w * fx, y: top + h * fy });
+  return [at(0.5, 0.5), at(0.25, 0.25), at(0.75, 0.25), at(0.25, 0.75), at(0.75, 0.75)];
+}
+
+/**
+ * True when every sample point is topped by something unrelated to the element (a dialog, drawer,
+ * menu or sticky header drawn over it). `topAt` returns the topmost page node at a point, ignoring
+ * Reviewer's own; `related` says whether that node is the element, inside it or around it. No samples,
+ * or a point with no page node at all, never counts as covered – the marker stays when in doubt.
+ */
+export function isCovered<T>(points: Point[], topAt: (p: Point) => T | null | undefined, related: (node: T) => boolean): boolean {
+  if (points.length === 0) return false;
+  for (const p of points) {
+    const node = topAt(p);
+    if (node == null || related(node)) return false;
+  }
+  return true;
 }
 
 const STYLE = `
@@ -53,6 +100,7 @@ export class Overlay {
   constructor(
     private doc: Document,
     private handlers: { onPlus: (el: Element) => void; onMarker: (id: number) => void },
+    private labels: OverlayLabels,
   ) {
     const style = doc.createElement('style');
     style.setAttribute('data-reviewer-ui', '');
@@ -64,7 +112,7 @@ export class Overlay {
     this.hoverBox = this.mk('rz-hover');
     this.plus = this.mk('rz-plus');
     this.plus.textContent = '+';
-    this.plus.title = 'Add a comment to this element';
+    this.plus.title = labels.plus;
     this.tag = this.mk('rz-tag');
     this.hideHover();
     this.root.append(this.hoverBox, this.tag, this.plus);
@@ -91,6 +139,13 @@ export class Overlay {
       this.schedule();
     });
     this.mo.observe(doc.body, { childList: true, subtree: true, attributes: true, characterData: true });
+    // Pages also open and close dialogs with a class on <html> (`html.modal-open`), outside the body subtree.
+    this.mo.observe(doc.documentElement, { attributes: true });
+    // A dialog that fades out changes a class first and only stops covering its element when the
+    // transition ends – no mutation fires then, so re-test the markers when it does.
+    doc.addEventListener('transitionend', schedule, true);
+    doc.addEventListener('animationend', schedule, true);
+    this.cleanup.push(() => doc.removeEventListener('transitionend', schedule, true), () => doc.removeEventListener('animationend', schedule, true));
     // Late-loading images / fonts move things around.
     win.addEventListener('load', schedule);
     doc.fonts?.ready.then(schedule).catch(() => {});
@@ -167,7 +222,7 @@ export class Overlay {
       }
       const mark = m.status === 'approved' ? '✓' : m.status === 'rejected' ? '✕' : String(m.number);
       nodes.dot.textContent = mark;
-      nodes.dot.title = m.status === 'open' ? `Comment #${m.number}` : `Comment #${m.number} – ${m.status}`;
+      nodes.dot.title = this.labels.marker(m);
       const mods = `${m.mine ? ' mine' : ''}${m.status === 'open' ? '' : ` ${m.status}`}${m.active ? ' active' : ''}`;
       nodes.dot.className = `rz-marker${mods}`;
       nodes.box.className = `rz-outline${mods}`;
@@ -182,17 +237,35 @@ export class Overlay {
     this.layoutMarkers();
   }
 
+  /**
+   * Hit test: is the element hidden under something the page drew over it? Our container sits at the
+   * top of the z-order, so without this a marker would float over a modal opened above its element.
+   */
+  private covered(el: Element): boolean {
+    const win = this.doc.defaultView!;
+    const root = this.doc.documentElement;
+    const viewport = { width: Math.min(win.innerWidth, root.clientWidth || win.innerWidth), height: Math.min(win.innerHeight, root.clientHeight || win.innerHeight) };
+    return isCovered(
+      samplePoints(el.getBoundingClientRect(), viewport),
+      (p) => this.doc.elementsFromPoint(p.x, p.y).find((n) => !isReviewerNode(n)),
+      // An ancestor on top means the element itself is not hit-testable there (pointer-events: none).
+      (n) => n === el || el.contains(n) || n.contains(el),
+    );
+  }
+
   private layoutMarkers() {
+    // Measure every element before moving any marker: interleaving reads and writes forces a reflow per marker.
+    // A detached or covered element hides its marker and outline and takes no slot below.
+    const measured = this.markers.map((m) => ({ m, r: m.el.isConnected && !this.covered(m.el) ? this.rectOf(m.el) : null }));
     // Stack markers that would land on the same spot.
     const taken: Array<{ top: number; left: number }> = [];
-    for (const m of this.markers) {
+    for (const { m, r } of measured) {
       const nodes = this.markerNodes.get(m.id)!;
-      if (!m.el.isConnected) {
+      if (!r) {
         nodes.dot.style.display = nodes.box.style.display = 'none';
         continue;
       }
       nodes.dot.style.display = nodes.box.style.display = '';
-      const r = this.rectOf(m.el);
       this.place(nodes.box, r);
       // Sit just outside the element's top-left corner so small inline elements stay readable.
       let top = Math.max(r.top - 11, 0);

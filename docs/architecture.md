@@ -85,6 +85,7 @@ src/
   lib/url.ts             base-URL normalization, SSRF guard
   lib/proxy/             fetch.ts (limits) · rewrite.ts (cheerio) · inject.ts · handler.ts
   lib/client/            anchor.ts (selector/xpath/text) · overlay.ts (outline, +, markers) · api.ts
+  lib/i18n/              review-screen dictionaries (en.ts = keys, cs.ts) · t() · resolveLocale · server.ts (requestLocale)
   components/Review.svelte   the review screen
   pages/                 index · review/[id] · projects/[id]/manage · admin/users · p/[id]/[...path] · api/*
 ```
@@ -249,6 +250,51 @@ query or fragment, and the host must resolve to public addresses (an SSRF guard 
 `ALLOW_HTTP_TARGETS` and `ALLOW_PRIVATE_TARGETS` relax the last two for local development. Proxied
 responses are served `no-store` and `noindex`.
 
+## Uploaded sites (`kind = 'static'`)
+
+A project is either a proxied website (`kind = 'url'`, default) or an uploaded build (`'static'`, `base_url = ''`).
+An admin uploads a built folder on the manage page (`POST /api/projects/:id/site`, multipart, one `files` part
+per file named by its relative path; the picked folder's own name is stripped, `..`/absolute/backslash paths are
+rejected, 3000 files / 150 MB, `index.html` required at the root). Files are written to a fresh sibling folder and
+swapped in, so a half-finished upload never serves. They live in `SITES_DIR/{projectId}`, and deleting the project
+deletes the folder. `GET /p/{id}/{path}` serves them (`lib/sites.ts`): existing file, else the root `index.html` for an
+extension-less path (SPA fallback), else 404. Every HTML response gets `<base href="/p/{id}/">` and a *reduced*
+inject script – navigation reporting only, no click/form/fragment interception, because the site is same-origin and
+routes itself. No probe, SSRF guard or fetch happens for these projects.
+
+**Page context.** A page may define `window.reviewerContext()` → `{label?, state?}`; the review screen sends it as
+`context` with every new comment (`comments.context`, JSON, `state` dropped above 256 KB). A card with a `state`
+offers *Restore state*: the island calls `window.reviewerRestore(state)` and, when it returns truthy, reloads the
+frame at the comment's path. `?comment=<id>` on the review URL does the same on first load.
+
+**Stable anchors.** A page can name its own anchor attributes with
+`<meta name="reviewer-anchors" content="data-poc-anchor data-foo">` (spaces or commas; only `data-[a-z0-9-]+` names
+count, the rest is ignored). Reviewer's own `data-review-anchor` is always on, after the declared ones. When the
+clicked element carries one of them with a value unique in the document, the comment is anchored by
+`[attr="value"]` directly (first attribute in that order wins), in preference to any derived selector; otherwise the
+attributes are still allowed in finder's selectors, so an ancestor's anchor can appear in one. The meta is read once
+per frame document. Nothing in Reviewer knows a particular page's attribute names. This applies to proxied sites as
+well as uploaded ones.
+
+## Languages
+
+Reviewers comment, owners and admins manage – and they are not always the same audience. Only the
+**review screen** is translated (Czech and English); the project list, the manage page, the user
+overview, exports and the 401/403 texts stay English. The locale is resolved per request in
+`review/[id].astro` from `Accept-Language` (first supported language by quality; `cs` and `sk` map to
+`cs`), else `DEFAULT_LOCALE`, else `en` — no cookie, no switch. The page sets `<html lang>` and hands
+the locale to the island. The two pages rendered *inside* the review frame — "nothing uploaded yet"
+(`lib/sites.ts`) and the proxy error page (`lib/proxy/handler.ts`) — resolve it the same way from the
+frame request. The island detects the proxy error page by its `<meta name="reviewer-error">`, not by
+the (translated) title.
+
+`lib/i18n/` holds two dictionaries and a ~20-line `t(key, params)`: `en.ts` is the source of keys,
+`cs.ts` is typed against it (a missing key fails `npm run check`), `{name}` is interpolated and plurals
+go through `Intl.PluralRules` (1 komentář / 2–4 komentáře / 5+ komentářů). Dates use `Intl` with `cs-CZ`
+or `en-GB`. The overlay drawn into the page takes its titles from the island. The API stays English:
+the messages the review screen can hit are mapped to keys on the client (`API_ERRORS`), a bare status
+or a network failure gets a generic text, and anything else is shown with the server's text as detail.
+
 ## Element anchoring
 
 The hardest requirement is that a comment still points at the right element after the site has been
@@ -275,6 +321,41 @@ the DOM changed, which is why the text check comes first.
 Resolution is retried a few times after load for pages that render late. Anything that still fails
 to resolve keeps its comment in the sidebar, flagged *element not found*.
 
+### Markers under page layers
+
+The overlay container sits at `z-index: 2147483000`, so without a check a marker would float over a
+dialog, drawer, menu or sticky header the page opens above its element. `layoutMarkers()` therefore
+hit-tests each element at five points of its on-screen rect — the centre and four points inset 25 %
+from the corners — with `elementsFromPoint`, skipping Reviewer's own nodes, and hides marker and
+outline when every point is topped by something that is neither the element, inside it, nor around
+it (an ancestor on top means the element is `pointer-events: none` there, not covered). A covered
+marker takes no slot in the anti-overlap stacking. An element with no on-screen part is never hidden
+on that basis. Re-layout runs on DOM mutations (the body subtree plus attributes of `<html>`, where
+some pages flag an open dialog), scroll, resize and `transitionend` / `animationend`, so a dialog that
+closes with a fade is re-tested once the fade ends.
+
+### Comments inside dialogs
+
+A comment written on an element inside a dialog cannot be shown once the dialog is closed, and
+nothing on the page says which dialog it was. `lib/client/layers.ts` handles this generically, from
+standard markup only (`dialog[open]`, `role="dialog"` / `"alertdialog"`, `aria-modal="true"`):
+
+- Every click that reaches the page (Browse mode, ⌥-click, or a replay) is kept in a short trail
+  (last 40) with the element's anchors, the dialog it sat in and the dialogs already open.
+- On a new comment inside a dialog, the review screen stores `context.layer` = the dialog's
+  accessible name (`aria-label`, `aria-labelledby`, first heading) and its *openers*: the last click
+  made while that dialog was not yet open, preceded by the opener of the dialog that click sat in
+  (up to three levels). An incomplete chain is stored empty.
+- The card says "In the dialog “…”". When the element is not on the page, the card offers *Open the
+  dialog*; it and a card click resolve each opener and click it (Comment mode lets these clicks
+  through), then point at the element. The `?comment=` deep link and *Restore state* end in the same
+  path after the reload. Exports append the dialog to the place label.
+- Re-anchoring follows client-side changes: a body `MutationObserver` (debounced 250 ms) re-resolves
+  when a commented element came or went, so cards and markers track a dialog opening and closing.
+
+Only the opening is replayed, not choices made inside the dialog before the comment. A dialog opened
+by something other than a click (a timer, a keyboard shortcut that is not a click) has no opener.
+
 ### Viewport is part of the comment's identity
 
 Responsive sites render a different DOM at phone width — collapsed navigation, reordered or dropped
@@ -300,7 +381,10 @@ users     id, oid (unique, Entra object id), email, name,
           created_at, last_seen_at
 
 projects  id, name,
-          base_url,          -- https://site.example.com, no trailing slash
+          base_url,          -- https://site.example.com, no trailing slash ('' for an uploaded site)
+          kind,              -- 'url' | 'static'
+          site_uploaded_at,  -- last finished upload of a static project, null until then
+          phone_view,        -- 1 | 0, default 1: offer the iPhone 15 viewport on the review screen
           created_by → users, created_at
 
 comments  id, project_id → projects (cascade), user_id → users (cascade),
@@ -396,4 +480,7 @@ access level, `managedProjects` and `setOwners` (`tests/access.test.ts`); and th
 key-presence dispatch, driven through the real handler (`tests/comment-patch.test.ts`).
 
 The DOM-dependent parts — anchoring and the overlay — are verified by driving a real browser against
-the running app.
+the running app. The overlay's occlusion test is split so its logic runs in node: `samplePoints()`
+(where to hit-test an element, clipped to the viewport) and `isCovered()` (how the per-point answers
+combine) are pure and covered in `tests/overlay.test.ts`; only the `elementsFromPoint` call needs the
+browser.

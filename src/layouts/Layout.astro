@@ -1,12 +1,16 @@
 ---
 import '~/styles/global.css';
+import { translator, type Locale } from '~/lib/i18n';
 
 interface Props {
   title: string;
   /** Full-height app layout without page padding (review screen). */
   fullscreen?: boolean;
+  /** Only the review screen is translated; every other page is English. */
+  locale?: Locale;
 }
-const { title, fullscreen = false } = Astro.props;
+const { title, fullscreen = false, locale = 'en' } = Astro.props;
+const t = translator(locale);
 const user = Astro.locals.user;
 const initials = (user.name ?? user.email)
   .split(/[\s.@_-]+/)
@@ -18,7 +22,7 @@ const path = Astro.url.pathname;
 ---
 
 <!doctype html>
-<html lang="en" class:list={[{ 'overflow-hidden': fullscreen }]}>
+<html lang={locale} class:list={[{ 'overflow-hidden': fullscreen }]}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -98,11 +102,8 @@ const path = Astro.url.pathname;
         <rect x="2.6" y="3.6" width="14.8" height="14.8" rx="3.2" fill="none" stroke="currentColor" stroke-width="1.7" opacity="0.65" />
         <circle cx="17.6" cy="17.6" r="4.6" fill="var(--color-brand)" />
       </svg>
-      <h1 class="mt-6 text-xl font-semibold tracking-tight text-white">Reviewer needs a bigger screen</h1>
-      <p class="mt-3 max-w-sm text-sm leading-relaxed text-gray-400">
-        Reviewing means walking through a website with the comments next to it and pointing at the
-        element you mean. That does not fit on a phone – open this page on a desktop or laptop.
-      </p>
+      <h1 class="mt-6 text-xl font-semibold tracking-tight text-white">{t('smallScreen.title')}</h1>
+      <p class="mt-3 max-w-sm text-sm leading-relaxed text-gray-400">{t('smallScreen.body')}</p>
     </div>
   </body>
 </html>

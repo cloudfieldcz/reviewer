@@ -1,0 +1,10 @@
+#cloud-config
+# Docker Engine + the compose plugin from Ubuntu's own archive; security updates come through
+# unattended-upgrades, which Ubuntu enables by default.
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+runcmd:
+  - systemctl enable --now docker
+  - usermod -aG docker ${ADMIN_USER}

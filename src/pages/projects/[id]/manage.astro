@@ -5,6 +5,7 @@ import { listOwners, projectAccess } from '~/lib/access';
 import { COMMENT_STATUSES, listComments, normalizePagePath, type CommentStatus } from '~/lib/comments';
 import { db, schema } from '~/lib/db';
 import { getProject } from '~/lib/projects';
+import { countSiteFiles } from '~/lib/sites';
 
 // Not under /admin/: owners reach this page too, and /admin/* keeps meaning "global admin only".
 const user = Astro.locals.user;
@@ -19,6 +20,8 @@ try {
 const access = projectAccess(project.id, user);
 if (access === 'reviewer') return new Response('Forbidden', { status: 403 });
 const isAdmin = access === 'admin';
+const isStatic = project.kind === 'static';
+const fileCount = isStatic && project.siteUploadedAt ? await countSiteFiles(project.id) : 0;
 
 const owners = listOwners(project.id);
 // The user directory is fetched ONLY for admins. Serialising it for an owner would hand every
@@ -64,7 +67,9 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
     <div class="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">{project.name}</h1>
-        <a href={project.baseUrl} target="_blank" rel="noopener" class="mt-1 inline-block font-mono text-xs text-gray-500 hover:text-brand">{project.baseUrl.replace(/^https?:\/\//, '')}</a>
+        {isStatic
+          ? <span class="mt-1 inline-block font-mono text-xs text-gray-500">Uploaded site</span>
+          : <a href={project.baseUrl} target="_blank" rel="noopener" class="mt-1 inline-block font-mono text-xs text-gray-500 hover:text-brand">{project.baseUrl.replace(/^https?:\/\//, '')}</a>}
       </div>
       <a class="btn-primary" href={`/review/${project.id}`}>Open review</a>
     </div>
@@ -77,16 +82,39 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
             <span class="mb-1.5 block font-medium text-gray-700">Name</span>
             <input name="name" class="input" value={project.name} required maxlength="200" />
           </label>
+          {isStatic ? <div></div> : (
           <label class="block text-sm">
             <span class="mb-1.5 block font-medium text-gray-700">Website address</span>
             <input name="baseUrl" class="input" type="url" value={project.baseUrl} required />
-          </label>
+          </label>)}
           <div class="flex gap-2">
             <button class="btn-primary" type="submit">Save</button>
             <button class="btn-danger" type="button" id="delete-btn">Delete project</button>
           </div>
+          <label class="flex items-start gap-2 text-sm sm:col-span-3">
+            <input name="phoneView" type="checkbox" class="mt-0.5 h-4 w-4 rounded border-gray-300 accent-[var(--color-brand)]" checked={project.phoneView} />
+            <span>
+              <span class="block font-medium text-gray-700">Phone view (iPhone 15)</span>
+              <span class="block text-xs text-gray-500">Turn off for sites that are not built for phones.</span>
+            </span>
+          </label>
         </form>
         <p id="project-msg" class="mt-2 min-h-5 text-sm"></p>
+      </section>
+    )}
+
+    {isAdmin && isStatic && (
+      <section class="card mb-6 p-5">
+        <h2 class="mb-1 text-sm font-semibold tracking-tight">Uploaded site</h2>
+        <p class="mb-3 text-xs text-gray-500">Pick the folder of the built site (it must contain index.html at its root). A new upload replaces the previous one.</p>
+        <div class="flex flex-wrap items-center gap-3">
+          <input id="site-files" type="file" multiple class="text-sm" {...{ webkitdirectory: true }} />
+          <button id="site-upload" class="btn-primary" type="button">Upload</button>
+          <span id="site-msg" class="text-sm"></span>
+        </div>
+        <p id="site-info" class="mt-2 text-xs text-gray-500">
+          {project.siteUploadedAt ? `Last upload ${fmt(project.siteUploadedAt)} · ${fileCount} files` : 'Nothing uploaded yet.'}
+        </p>
       </section>
     )}
 
@@ -187,7 +215,7 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
             <tr class="align-top transition-colors hover:bg-gray-50" data-comment-id={c.id}>
               <td class="px-3 py-2.5 font-mono text-xs text-gray-400">{c.id}</td>
               <td class="px-3 py-2.5 whitespace-nowrap" title={c.author.email}>{c.author.name ?? c.author.email}</td>
-              <td class="px-3 py-2.5 font-mono text-xs"><a class="text-brand hover:underline" href={`/review/${project.id}?path=${encodeURIComponent(c.pagePath)}&device=${c.viewport}#c${c.id}`}>{c.pagePath}</a></td>
+              <td class="px-3 py-2.5 font-mono text-xs"><a class="text-brand hover:underline" href={`/review/${project.id}?path=${encodeURIComponent(c.pagePath)}&device=${c.viewport}&comment=${c.id}#c${c.id}`}>{c.pagePath}</a>{c.context?.label && <div class="mt-0.5 font-sans text-[11px] text-gray-500">{c.context.label}</div>}</td>
               <td class="px-3 py-2.5 whitespace-nowrap text-xs text-gray-500">{c.viewport === 'phone' ? 'iPhone 15' : 'Desktop'}</td>
               <td class="px-3 py-2.5 text-gray-500 max-w-56">
                 {c.tagName && <code class="text-xs">&lt;{c.tagName}&gt;</code>}
@@ -234,11 +262,13 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
   const projectMsg = document.getElementById('project-msg');
   document.getElementById('project-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const fd = new FormData(e.target as HTMLFormElement);
+    const form = e.target as HTMLFormElement;
+    const fd = new FormData(form);
+    const phoneView = (form.elements.namedItem('phoneView') as HTMLInputElement).checked;
     const res = await fetch(`/api/projects/${projectId}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: fd.get('name'), baseUrl: fd.get('baseUrl') }),
+      body: JSON.stringify({ name: fd.get('name'), ...(fd.has('baseUrl') ? { baseUrl: fd.get('baseUrl') } : {}), phoneView }),
     });
     const data = await res.json().catch(() => ({}));
     flash(projectMsg, res.ok ? 'Saved.' : data.error ?? `Error ${res.status}`, res.ok);
@@ -250,6 +280,35 @@ const fmt = (s: string) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('e
     if (res.ok) location.href = '/';
     else flash(projectMsg, `Error ${res.status}`, false);
   });
+
+  // ---- site upload (admins, uploaded-site projects only) ----
+  const siteFiles = document.getElementById('site-files') as HTMLInputElement | null;
+  if (siteFiles) {
+    const siteMsg = document.getElementById('site-msg');
+    const upload = document.getElementById('site-upload') as HTMLButtonElement;
+    upload.addEventListener('click', () => {
+      const files = [...(siteFiles.files ?? [])];
+      if (files.length === 0) return flash(siteMsg, 'Pick a folder first.', false);
+      const fd = new FormData();
+      for (const f of files) fd.append('files', f, f.webkitRelativePath || f.name);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/projects/${projectId}/site`);
+      xhr.upload.onprogress = (e) => e.lengthComputable && flash(siteMsg, `Uploading… ${Math.round((e.loaded / e.total) * 100)} %`, true);
+      xhr.onload = () => {
+        let data: { files?: number; error?: string } = {};
+        try { data = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
+        upload.disabled = false;
+        if (xhr.status === 200) {
+          flash(siteMsg, `Uploaded ${data.files} files.`, true);
+          document.getElementById('site-info')!.textContent = `Last upload just now · ${data.files} files`;
+        } else flash(siteMsg, data.error ?? `Error ${xhr.status}`, false);
+      };
+      xhr.onerror = () => { upload.disabled = false; flash(siteMsg, 'Upload failed.', false); };
+      upload.disabled = true;
+      flash(siteMsg, `Uploading ${files.length} files…`, true);
+      xhr.send(fd);
+    });
+  }
 
   // ---- owners (admins only) ----
   const pills = document.getElementById('owner-pills');

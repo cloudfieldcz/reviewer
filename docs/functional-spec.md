@@ -79,12 +79,13 @@ Deliberate choices here:
 ### User
 
 1. Sign in (Entra ID, no separate account) → the project list.
-2. Pick a project → the review screen opens on the project's home page, with a card explaining the
-   two modes. The card returns on every visit until the reviewer ticks *Got it, don't show this
+2. Pick a project → the review screen opens on the project's home page in browse mode, with a card
+   explaining the two modes. The card returns on every visit until the reviewer ticks *Got it, don't show this
    again*; the **?** button in the toolbar brings it back (unticking the box makes it return again).
-3. Hover an element; it gets an outline and a `+` button. Click it, type the comment, save.
-4. Switch to browse mode, navigate to another page, switch back and keep commenting.
-5. Own comments can be edited or deleted from the sidebar while they are still open. A rejected
+3. Navigate to the page to review, switch to comment mode (**C** or the toolbar switch).
+4. Hover an element; it gets an outline and a `+` button. Click it, type the comment, save.
+5. Switch back to browse mode, navigate to another page, switch again and keep commenting.
+6. Own comments can be edited or deleted from the sidebar while they are still open. A rejected
    comment turns up under *Mine* with the *Rejected* chip lit, usually with a reply saying why.
 
 ### Owner
@@ -116,7 +117,7 @@ and orphaned comments about a site nobody reviews any more are noise.
 
 ```
 ┌──────────────────────────────────────────────┬──────────────┐
-│ [◱] name  ‹ › ↻  /contact  ↗  [Comment|Browse]│  Comments    │
+│ [◱] name  ‹ › ↻  /contact  ↗  [Browse|Comment]│  Comments    │
 ├──────────────────────────────────────────────┤  All | Mine  │
 │                                              │              │
 │   <iframe src="/p/{id}/contact">             │  ① Heading…  │
@@ -134,8 +135,9 @@ person fixing the site. The highlight is an overlay element, never a change to t
 styling, so the site still looks the way it really looks.
 
 **Comment mode blocks navigation.** Without that, a link could not be commented on — the click would
-follow it. Browse mode turns clicks back on for getting around the site. Comment mode is on by
-default, because commenting is the reason people are there. Holding **⌥ (Alt)** sends a single click
+follow it. Browse mode turns clicks back on for getting around the site. Browse mode is on by
+default: reviewers usually first walk to the page they mean, and a page that swallows every click
+on arrival reads as broken. Holding **⌥ (Alt)** sends a single click
 to the page instead of creating a comment — enough to accept a cookie banner or open a menu without
 leaving comment mode; the hover highlight hides while the key is down.
 
@@ -147,8 +149,15 @@ every switch, and while ⌥ is held). **C** toggles the mode from anywhere, incl
 
 **Markers.** Every comment whose element was found gets a numbered circle next to it. Numbers follow
 the element's position on the page, not the order comments were written, so they read top to bottom
-like the page does. Markers reposition on scroll, resize and DOM changes. Clicking a marker
-highlights the sidebar entry and vice versa.
+like the page does. Markers reposition on scroll, resize and DOM changes. A marker whose element is
+covered by something the page draws on top of it — a dialog, a drawer, a menu, a sticky header —
+hides with its outline until the element is visible again. Clicking a marker highlights the sidebar
+entry and vice versa.
+
+**Comments inside dialogs.** A comment written inside a dialog says so on its card ("In the dialog
+“Start analysis”"). Once the dialog is closed, the card offers *Open the dialog*: Reviewer clicks
+again what opened the dialog when the comment was written, and points at the element. Clicking the
+card or opening the comment's link does the same.
 
 **Sidebar.** Filter *All / Mine*, own comments visually distinct from other people's, edit and
 delete on own open entries only, author and timestamp on each. Comments whose element cannot be
@@ -171,6 +180,11 @@ the list — *● Open*, *✓ Approved*, *✕ Rejected*, each with its count —
 green ✓, rejected ones a red ✕, both muted. Replying to a decided comment stays possible — the
 verdict ends the work, not the conversation.
 
+**Language.** The review screen speaks Czech or English, chosen from the browser's language
+(Slovak gets Czech) with `DEFAULT_LOCALE` as the fallback; there is no switch. It is the only
+translated screen — the people who comment need it, the owners and admins who manage projects read
+English.
+
 **Navigation.** Links inside the frame stay inside the proxy. The toolbar shows the current path,
 offers back / forward / reload, and takes a typed path. The path is mirrored into the Reviewer URL
 (`?path=…`) so a specific page under review can be linked to or reloaded.
@@ -179,7 +193,11 @@ offers back / forward / reload, and takes a typed path. The path is mirrored int
 an iPhone 15 shell — a real 393 × 852 px viewport, so the site's own media queries decide what it
 shows. The frame is never reloaded when switching, only resized, and the shell scales down to fit a
 short window (the page still believes it is 393 × 852). The choice is mirrored into the URL
-(`?device=…`) and remembered per browser.
+(`?device=…`) and remembered per browser. An admin can switch the phone view off per project (manage
+screen, *Phone view*) for a site that is not built for phones: the switch disappears, the screen is
+always the desktop one whatever the link or the remembered choice says, and the "N comments in the
+iPhone view" line is not shown. Comments already written on the phone are kept and stay in the
+manage table and the exports.
 
 **Comments are kept per viewport.** A phone layout is a different DOM: the navigation collapses into
 a burger, sections are reordered, elements disappear. A comment made on the phone would therefore

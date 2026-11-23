@@ -31,7 +31,8 @@ FROM node:22-alpine
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=4321 \
-    DATABASE_PATH=/data/reviewer.db
+    DATABASE_PATH=/data/reviewer.db \
+    SITES_DIR=/data/sites
 WORKDIR /app
 # The app runs on plain `node`; npm, corepack and yarn only add CVEs to the published image.
 RUN apk upgrade --no-cache && apk add --no-cache curl \
