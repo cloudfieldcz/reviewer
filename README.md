@@ -79,6 +79,30 @@ Already running Traefik and Redis? Take only the `oauth2-reviewer` and `reviewer
 file, drop `traefik`/`redis` from their `depends_on` and point
 `OAUTH2_PROXY_REDIS_CONNECTION_URL` at your Redis.
 
+### Scripts: Azure VM, Entra ID, roll-out, backup
+
+The same stack, scripted. Everything but `deploy/azure/` works against any Docker host over SSH.
+
+```bash
+az login
+DNS_LABEL=my-reviewer deploy/azure/provision.sh        # VM + DNS name + firewall (80/443 open, 22 from your IP)
+deploy/azure/entra-app.sh my-reviewer.westeurope.cloudapp.azure.com   # app registration → deploy/.env
+SSH_TARGET=azureuser@my-reviewer.westeurope.cloudapp.azure.com deploy/deploy.sh
+deploy/azure/invite-guest.sh someone@partner.example   # B2B guest (or a tenant member) + the USER role
+```
+
+- `entra-app.sh` does the steps of "Entra ID app registration" below and switches on *Assignment
+  required*: only people with an app role get in. `deploy/.env` therefore has no `ADMIN_EMAILS` and no
+  `DEFAULT_ROLE`.
+- People from another organisation come in as **B2B guests** of your tenant. They sign in with their
+  own organisation's account; nothing is registered or approved in their tenant.
+- `deploy.sh` copies the compose file and `.env` to `~/reviewer` on the host, pulls and recreates.
+  `BUILD_REF=<branch|tag|commit>` builds the image on the host from the public repository instead of
+  pulling a release – for a branch without a published image. That build goes straight to
+  `registry.npmjs.org`, not through the Shieldoo Gate.
+- `backup.sh` saves the `reviewer-data` volume (database + uploaded sites) to a local `tar.gz`;
+  `backup.sh restore <file>` puts it back. Moving to another host = deploy there, restore, repoint DNS.
+
 ### Releases
 
 `.github/workflows/release.yml` builds the image, pushes it to GHCR and opens a GitHub Release whenever a version tag is pushed:

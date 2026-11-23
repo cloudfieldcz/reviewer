@@ -36,6 +36,11 @@ prototype, and a page that uses none of the new hooks behaves as before.
 - **Phone view per project.** Admins can switch off the *Desktop / iPhone 15* switch in the manage
   page settings, for sites not built for phones. The review screen then always shows the desktop
   view. Existing phone comments are kept.
+- **Deployment scripts.** `deploy/azure/provision.sh` creates an Azure VM for the compose stack,
+  `deploy/azure/entra-app.sh` registers the app in Entra ID and writes `deploy/.env`,
+  `deploy/azure/invite-guest.sh` gives a tenant member or a B2B guest an app role, `deploy/deploy.sh`
+  rolls the stack out to any Docker host over SSH and `deploy/backup.sh` saves and restores the data
+  volume. See README, "Scripts".
 - **Czech on the review screen.** The review screen (and the two pages shown inside its frame:
   *nothing uploaded yet* and the proxy error) follows the browser's language: Czech for `cs` and
   `sk`, otherwise English, or `DEFAULT_LOCALE` when the browser names neither. The project list,
@@ -48,6 +53,10 @@ prototype, and a page that uses none of the new hooks behaves as before.
   it.
 - **Some English texts on the review screen.** Relative times now come from `Intl` (for example
   "yesterday" instead of "1 d ago"), and network errors read "Reviewer could not be reached – …".
+
+- **`@astrojs/svelte` 9.1.6** (from 9.0.1, which the Shieldoo Gate quarantines), with the Vite 8.3
+  line it requires.
+- **`deploy/docker-compose.yaml`** sets `SITES_DIR` and passes `DEFAULT_LOCALE` from `deploy/.env`.
 
 ### Fixed
 

@@ -96,6 +96,8 @@ services:
     environment:
       PUBLIC_ORIGIN: "https://${REVIEWER_HOST}"
       DATABASE_PATH: "/data/reviewer.db"
+      SITES_DIR: "/data/sites"
+      DEFAULT_LOCALE: "${DEFAULT_LOCALE:-en}"
       ADMIN_EMAILS: "${ADMIN_EMAILS}"
       DEFAULT_ROLE: "${DEFAULT_ROLE}"
     volumes:
